@@ -26,19 +26,20 @@ lsof -ti :<port> | xargs kill -9
 
 ## Installation
 
-### 1. One-Line Shell Script (Linux & macOS)
+### 1. Linux & macOS (One-line install)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.sh | sh
 ```
 
-### 2. Go Install (If Go is installed)
-```bash
-go install github.com/mugunth13labs/cli-ask@latest
+### 2. Windows (PowerShell one-line install)
+Run in PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.ps1 | iex
 ```
 
-### 3. Pre-compiled Binaries
-Download the binary for your OS and architecture from [Releases](https://github.com/mugunth13labs/cli-ask/releases):
-- **Windows (x64)**: `ask-windows-amd64.exe`
+### 3. Manual Download
+Download the standalone binary for your OS directly from [Releases](https://github.com/mugunth13labs/cli-ask/releases):
+- **Windows (x64)**: `ask-windows-amd64.exe` (rename to `ask.exe` and place in your PATH)
 - **Linux (x64 / arm64)**: `ask-linux-amd64`, `ask-linux-arm64`
 - **macOS (Apple Silicon & Intel)**: `ask-darwin-arm64`, `ask-darwin-amd64`
 
