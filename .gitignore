@@ -1,0 +1,23 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+dist/
+ask
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Config and keys
+.config/
+*.key
+*.env
+
+# OS Files
+.DS_Store
+Thumbs.db
