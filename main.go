@@ -277,7 +277,7 @@ func main() {
 
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/cli-ask/ask")
+	req.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
 	req.Header.Set("X-Title", "ask-cli")
 
 	client := &http.Client{Timeout: 90 * time.Second}

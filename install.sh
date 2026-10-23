@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="cli-ask/ask"
+REPO="mugunth13labs/cli-ask"
 LATEST_TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$LATEST_TAG" ]; then
