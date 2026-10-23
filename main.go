@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	version       = "0.1.0"
+	version       = "0.1.1"
 	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModel  = "nvidia/nemotron-3.5-lightning:free"
 	systemPrompt  = "You are a concise, helpful terminal CLI assistant. Provide direct, succinct answers without unnecessary fluff, pleasantries, or verbose commentary unless explicitly asked. Format code or commands clearly."
