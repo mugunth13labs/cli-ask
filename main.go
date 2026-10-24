@@ -551,15 +551,26 @@ func main() {
 	req.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
 	req.Header.Set("X-Title", "ask-cli")
 
+	// Universal visual feedback: print thinking status to stderr
+	if isTerminal {
+		fmt.Fprintf(os.Stderr, "[%s thinking...]", cfg.Model)
+	}
+
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		if isTerminal {
+			fmt.Fprint(os.Stderr, "\r\033[K")
+		}
 		fmt.Fprintf(os.Stderr, "Network error: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if isTerminal {
+			fmt.Fprint(os.Stderr, "\r\033[K")
+		}
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "OpenRouter API error (HTTP %d): %s\n", resp.StatusCode, string(body))
 		os.Exit(1)
@@ -570,6 +581,7 @@ func main() {
 	scanner.Buffer(buf, 1024*1024)
 
 	hasOutput := false
+	clearedStatus := false
 	var fullResponseBuilder strings.Builder
 
 	for scanner.Scan() {
@@ -586,6 +598,9 @@ func main() {
 			}
 
 			if streamResp.Error != nil {
+				if isTerminal && !clearedStatus {
+					fmt.Fprint(os.Stderr, "\r\033[K")
+				}
 				fmt.Fprintf(os.Stderr, "\nAPI Error: %s\n", streamResp.Error.Message)
 				break
 			}
@@ -593,6 +608,11 @@ func main() {
 			if len(streamResp.Choices) > 0 {
 				chunk := streamResp.Choices[0].Delta.Content
 				if chunk != "" {
+					if isTerminal && !clearedStatus {
+						// Erase the thinking indicator line before streaming content starts
+						fmt.Fprint(os.Stderr, "\r\033[K")
+						clearedStatus = true
+					}
 					fmt.Print(chunk)
 					fullResponseBuilder.WriteString(chunk)
 					hasOutput = true
