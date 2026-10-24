@@ -82,7 +82,28 @@ git diff | ask "review this diff for potential issues"
 netstat -tulpn | ask "which services are exposed publicly?"
 ```
 
-### Configuration & Switching Models
+## Session Memory & Context
+
+`ask` automatically remembers the conversation within the **same terminal window/tab** by scoping context to your terminal's shell process ID.
+
+- **Seamless Follow-ups**:
+  ```bash
+  $ ask "how do I list docker containers?"
+  $ ask "now filter by status running"
+  ```
+- **Auto-Compaction**: Older messages in long conversations are automatically compacted to stay lightweight, fast, and within model context windows without needing arbitrary time limits.
+- **Clear Session Context**:
+  ```bash
+  ask --clear   # or ask -c
+  ```
+- **One-off Standalone Queries**:
+  ```bash
+  ask --no-context "what is the capital of Peru?"
+  ```
+
+---
+
+## Configuration & Switching Models
 ```bash
 # Check current config
 ask --config

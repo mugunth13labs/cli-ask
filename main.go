@@ -14,10 +14,15 @@ import (
 )
 
 const (
-	version       = "0.1.1"
+	version       = "0.2.0"
 	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModel  = "nvidia/nemotron-3.5-lightning:free"
 	systemPrompt  = "You are a concise, helpful terminal CLI assistant. Provide direct, succinct answers without unnecessary fluff, pleasantries, or verbose commentary unless explicitly asked. Format code or commands clearly."
+
+	// Compaction thresholds
+	maxRecentMessages = 6    // keep last 6 messages (3 conversation turns) verbatim
+	maxTotalMessages  = 12   // trigger compaction when exceeding this count
+	maxCompactChars   = 8000 // trigger compaction if character count exceeds ~8k
 )
 
 type Config struct {
@@ -28,6 +33,12 @@ type Config struct {
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+type Session struct {
+	ID        string    `json:"id"`
+	Messages  []Message `json:"messages"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ChatRequest struct {
@@ -52,12 +63,148 @@ type StreamResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func getConfigPath() (string, error) {
+func getConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "ask", "config.json"), nil
+	return filepath.Join(home, ".config", "ask"), nil
+}
+
+func getConfigPath() (string, error) {
+	dir, err := getConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
+}
+
+func getSessionsDir() (string, error) {
+	dir, err := getConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "sessions"), nil
+}
+
+func getSessionID() string {
+	ppid := os.Getppid()
+	return fmt.Sprintf("session-%d", ppid)
+}
+
+func getSessionPath(sessionID string) (string, error) {
+	sDir, err := getSessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(sDir, sessionID+".json"), nil
+}
+
+func loadSession(sessionID string) (*Session, error) {
+	s := &Session{
+		ID:        sessionID,
+		Messages:  []Message{},
+		UpdatedAt: time.Now(),
+	}
+
+	sPath, err := getSessionPath(sessionID)
+	if err != nil {
+		return s, err
+	}
+
+	data, err := os.ReadFile(sPath)
+	if err != nil {
+		return s, nil // no session file yet
+	}
+
+	if err := json.Unmarshal(data, s); err != nil {
+		return s, nil
+	}
+
+	return s, nil
+}
+
+func saveSession(s *Session) error {
+	sDir, err := getSessionsDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(sDir, 0700); err != nil {
+		return err
+	}
+
+	sPath, err := getSessionPath(s.ID)
+	if err != nil {
+		return err
+	}
+
+	s.UpdatedAt = time.Now()
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(sPath, data, 0600)
+}
+
+func clearSession(sessionID string) error {
+	sPath, err := getSessionPath(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(sPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// compactHistory performs token-aware auto-compaction
+func compactHistory(messages []Message) []Message {
+	if len(messages) <= maxRecentMessages {
+		return messages
+	}
+
+	totalChars := 0
+	for _, m := range messages {
+		totalChars += len(m.Content)
+	}
+
+	if len(messages) < maxTotalMessages && totalChars < maxCompactChars {
+		return messages
+	}
+
+	// Split into older messages to compact and recent messages to keep verbatim
+	splitIdx := len(messages) - maxRecentMessages
+	older := messages[:splitIdx]
+	recent := messages[splitIdx:]
+
+	var summaryBuilder strings.Builder
+	summaryBuilder.WriteString("[Prior conversation context summary:\n")
+	for _, m := range older {
+		prefix := "User"
+		if m.Role == "assistant" {
+			prefix = "Assistant"
+		}
+		// Truncate long past responses to 200 characters each in summary
+		content := strings.TrimSpace(m.Content)
+		if len(content) > 200 {
+			content = content[:197] + "..."
+		}
+		// Single-line format
+		content = strings.ReplaceAll(content, "\n", " ")
+		summaryBuilder.WriteString(fmt.Sprintf("- %s: %s\n", prefix, content))
+	}
+	summaryBuilder.WriteString("]")
+
+	compactedMsg := Message{
+		Role:    "system",
+		Content: summaryBuilder.String(),
+	}
+
+	result := make([]Message, 0, len(recent)+1)
+	result = append(result, compactedMsg)
+	result = append(result, recent...)
+	return result
 }
 
 func loadConfig() (*Config, error) {
@@ -65,7 +212,6 @@ func loadConfig() (*Config, error) {
 		Model: defaultModel,
 	}
 
-	// Environment variable takes precedence for API Key
 	if envKey := os.Getenv("OPENROUTER_API_KEY"); envKey != "" {
 		cfg.APIKey = envKey
 	}
@@ -125,12 +271,16 @@ func promptAPIKey() (string, error) {
 }
 
 func printHelp() {
-	fmt.Printf(`ask v%s — Lightning-fast terminal AI query tool powered by OpenRouter
+	fmt.Printf(`ask v%s — Lightning-fast terminal AI query tool with session context
 
 Usage:
-  ask <prompt>                  Ask any question
+  ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
   echo "code" | ask "explain"   Pipe stdin to ask
+
+Session Memory:
+  ask --clear, -c               Clear current terminal's conversation history
+  ask --no-context <prompt>     Run query without reading or updating session history
 
 Configuration:
   ask --set-key <key>           Save OpenRouter API key
@@ -146,7 +296,6 @@ Environment:
 
 func main() {
 	if len(os.Args) < 2 {
-		// Check if data is piped via stdin
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) != 0 {
 			printHelp()
@@ -166,6 +315,14 @@ func main() {
 	case "-h", "--help", "help":
 		printHelp()
 		return
+	case "-c", "--clear":
+		sessionID := getSessionID()
+		if err := clearSession(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing session: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Session context cleared (%s).\n", sessionID)
+		return
 	case "--config":
 		cfg, _ := loadConfig()
 		cfgPath, _ := getConfigPath()
@@ -178,6 +335,7 @@ func main() {
 		}
 		fmt.Printf("Model:   %s\n", cfg.Model)
 		fmt.Printf("API Key: %s\n", maskedKey)
+		fmt.Printf("Session: %s\n", getSessionID())
 		return
 	case "--set-key":
 		if len(os.Args) < 3 {
@@ -207,12 +365,19 @@ func main() {
 		return
 	}
 
-	// Read prompt from arguments
-	var promptParts []string
-	if len(os.Args) > 1 {
-		promptParts = os.Args[1:]
+	// Parse arguments, check for --no-context
+	useContext := true
+	var promptArgs []string
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--no-context" {
+			useContext = false
+		} else {
+			promptArgs = append(promptArgs, arg)
+		}
 	}
-	userPrompt := strings.Join(promptParts, " ")
+
+	userPrompt := strings.Join(promptArgs, " ")
 
 	// Read piped input if available
 	stat, _ := os.Stdin.Stat()
@@ -254,13 +419,27 @@ func main() {
 		}
 	}
 
+	sessionID := getSessionID()
+	var currentSession *Session
+	if useContext {
+		currentSession, _ = loadSession(sessionID)
+	}
+
+	// Prepare messages array
+	var apiMessages []Message
+	apiMessages = append(apiMessages, Message{Role: "system", Content: systemPrompt})
+
+	if useContext && currentSession != nil && len(currentSession.Messages) > 0 {
+		compacted := compactHistory(currentSession.Messages)
+		apiMessages = append(apiMessages, compacted...)
+	}
+
+	apiMessages = append(apiMessages, Message{Role: "user", Content: userPrompt})
+
 	reqBody := ChatRequest{
-		Model: cfg.Model,
-		Messages: []Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		Stream: true,
+		Model:    cfg.Model,
+		Messages: apiMessages,
+		Stream:   true,
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
@@ -299,6 +478,8 @@ func main() {
 	scanner.Buffer(buf, 1024*1024)
 
 	hasOutput := false
+	var fullResponseBuilder strings.Builder
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
@@ -321,6 +502,7 @@ func main() {
 				chunk := streamResp.Choices[0].Delta.Content
 				if chunk != "" {
 					fmt.Print(chunk)
+					fullResponseBuilder.WriteString(chunk)
 					hasOutput = true
 				}
 			}
@@ -333,5 +515,14 @@ func main() {
 
 	if hasOutput {
 		fmt.Println()
+	}
+
+	// Save to session history if enabled
+	if useContext && currentSession != nil && hasOutput {
+		currentSession.Messages = append(currentSession.Messages,
+			Message{Role: "user", Content: userPrompt},
+			Message{Role: "assistant", Content: fullResponseBuilder.String()},
+		)
+		_ = saveSession(currentSession)
 	}
 }
