@@ -1,0 +1,28 @@
+Source: cli-ask
+Section: utils
+Priority: optional
+Maintainer: Mugunthan <mugunth13@proton.me>
+Build-Depends: debhelper-compat (= 13), golang-any
+Standards-Version: 4.7.0
+Homepage: https://github.com/mugunth13labs/cli-ask
+Rules-Requires-Root: no
+Vcs-Git: https://github.com/mugunth13labs/cli-ask.git
+Vcs-Browser: https://github.com/mugunth13labs/cli-ask
+
+Package: cli-ask
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: non-intrusive terminal AI assistant with session-scoped context
+ ask is a lightweight command-line query tool designed specifically for
+ system administrators and infrastructure engineers who want succinct AI
+ guidance without disrupting their terminal workflow.
+ .
+ Unlike heavyweight interactive AI assistants or terminal UI wrappers, ask
+ executes directly in standard shell pipelines, streams direct answers to
+ standard output, and exits immediately.
+ .
+ Context is automatically scoped to the parent shell process (PPID), allowing
+ conversational follow-up questions within the same terminal tab without
+ cross-contaminating other active shell sessions. Long sessions use
+ token-aware auto-compaction to preserve crucial context without arbitrary
+ timeouts or extra latency.

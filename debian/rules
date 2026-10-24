@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+export DH_GOPKG := github.com/mugunth13labs/cli-ask
+
+%:
+	dh $@ --builddirectory=_build
+
+override_dh_auto_build:
+	go build -ldflags="-s -w" -o _build/bin/ask .
+
+override_dh_auto_test:
+	go test -v .

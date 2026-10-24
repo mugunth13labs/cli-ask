@@ -1,0 +1,75 @@
+.TH ASK 1 "October 2026" "cli-ask 0.2.0" "User Commands"
+.SH NAME
+ask \- non-intrusive terminal AI assistant with session-scoped context
+.SH SYNOPSIS
+.B ask
+[\fIOPTIONS\fR] [\fIPROMPT\fR]
+.br
+.I COMMAND
+|
+.B ask
+[\fIOPTIONS\fR] [\fIPROMPT\fR]
+.SH DESCRIPTION
+.B ask
+is a lightweight, zero-dependency command-line utility designed for system administrators, DevOps engineers, and terminal users who want immediate, fluff-free AI answers without disrupting their shell workflow.
+.PP
+Unlike interactive TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately.
+.PP
+Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
+
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-clear
+Clear the conversation history for the current terminal session.
+.TP
+.B \-\-no\-context
+Execute the query as a standalone request without loading or updating the session history.
+.TP
+.BR \-\-set\-key " " \fIAPI_KEY\fR
+Save your OpenRouter API key to the user configuration file.
+.TP
+.BR \-\-set\-model " " \fIMODEL\fR
+Set the default OpenRouter model slug (defaults to \fBnvidia/nemotron-3.5-lightning:free\fR).
+.TP
+.B \-\-config
+Display the current configuration file path, active model, session identifier, and masked API key.
+.TP
+.BR \-v ", " \-\-version
+Print program version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print usage help and exit.
+
+.SH ENVIRONMENT
+.TP
+.B OPENROUTER_API_KEY
+If set, overrides the API key saved in the configuration file.
+
+.SH FILES
+.TP
+.I ~/.config/ask/config.json
+User configuration containing API credentials and preferred model.
+.TP
+.I ~/.config/ask/sessions/session\-<PPID>.json
+Session-scoped conversation history for the active terminal shell.
+
+.SH EXAMPLES
+.TP
+.B Quick command lookup:
+ask "how to find listening ports in linux"
+.TP
+.B Follow-up in same terminal:
+ask "filter only tcp ones"
+.TP
+.B Standard input piping:
+git diff | ask "summarize these changes"
+.TP
+.B Clear active session:
+ask --clear
+
+.SH AUTHOR
+Maintained by mugunth13labs <https://github.com/mugunth13labs/cli-ask>.
+.SH "REPORTING BUGS"
+Report bugs to <https://github.com/mugunth13labs/cli-ask/issues>.
+.SH COPYRIGHT
+Copyright \(co 2026. Released under the MIT License.

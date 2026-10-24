@@ -1,0 +1,7 @@
+cli-ask (0.2.0-1) unstable; urgency=medium
+
+  * Initial release (Closes: #XXXXXX).
+  * Non-intrusive terminal AI query tool with PPID session-scoped context.
+  * Token-aware auto-compaction for long conversations.
+
+ -- Mugunthan <mugunth13@proton.me>  Sat, 24 Oct 2026 13:45:00 +0800

@@ -1,0 +1,30 @@
+To: submit@bugs.debian.org
+Subject: ITP: cli-ask -- non-intrusive terminal AI assistant with session-scoped context
+Package: wnpp
+Severity: wishlist
+Owner: Mugunthan <mugunth13@proton.me>
+
+* Package name    : cli-ask
+  Version         : 0.2.0
+  Upstream Author : Mugunthan <https://github.com/mugunth13labs>
+* URL             : https://github.com/mugunth13labs/cli-ask
+* License         : MIT (Expat)
+  Programming Lang: Go
+  Description     : non-intrusive terminal AI assistant with session-scoped context
+
+ask is a lightweight, zero-dependency command-line query tool designed
+specifically for system administrators and infrastructure engineers who
+want succinct AI guidance without disrupting their terminal workflow.
+
+Unlike interactive TUI-based AI assistants, ask acts as a native Unix filter:
+it executes directly from standard command pipelines, streams concise answers
+directly to standard output, and exits immediately.
+
+Conversational context is automatically preserved and scoped to the parent
+shell process ID (PPID). Follow-up questions in the same terminal window
+retain knowledge of prior turns without cross-contaminating other shell tabs
+or tmux panes. Long conversations are automatically compacted to maintain
+responsiveness and avoid token window exhaustion.
+
+This package has zero external third-party dependencies, compiling strictly
+with the Go standard library.

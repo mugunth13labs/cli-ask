@@ -28,6 +28,9 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Run Tests
+        run: go test -v .
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -40,6 +43,37 @@ jobs:
           OUTPUT="dist/ask-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
           mkdir -p dist
           go build -ldflags="-s -w" -o "${OUTPUT}" .
+
+      - name: Build .deb package (Linux only)
+        if: matrix.goos == 'linux'
+        run: |
+          CLEAN_VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_DIR="build_deb_${{ matrix.goarch }}"
+          mkdir -p "${BUILD_DIR}/DEBIAN"
+          mkdir -p "${BUILD_DIR}/usr/bin"
+          mkdir -p "${BUILD_DIR}/usr/share/man/man1"
+
+          cp "dist/ask-linux-${{ matrix.goarch }}" "${BUILD_DIR}/usr/bin/ask"
+          chmod 755 "${BUILD_DIR}/usr/bin/ask"
+          cp "man/ask.1" "${BUILD_DIR}/usr/share/man/man1/ask.1"
+          chmod 644 "${BUILD_DIR}/usr/share/man/man1/ask.1"
+
+          cat <<EOF > "${BUILD_DIR}/DEBIAN/control"
+Package: cli-ask
+Version: ${CLEAN_VERSION}
+Section: utils
+Priority: optional
+Architecture: ${{ matrix.goarch }}
+Maintainer: Mugunthan <mugunth13@proton.me>
+Description: Non-intrusive terminal AI assistant with session-scoped context
+ ask is a lightweight command-line query tool designed specifically for
+ system administrators and infrastructure engineers who want succinct AI
+ guidance without disrupting their terminal workflow.
+EOF
+          chmod 755 "${BUILD_DIR}/DEBIAN"
+          chmod 644 "${BUILD_DIR}/DEBIAN/control"
+
+          dpkg-deb --build "${BUILD_DIR}" "dist/cli-ask_${CLEAN_VERSION}_${{ matrix.goarch }}.deb"
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
