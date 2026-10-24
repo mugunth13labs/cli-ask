@@ -36,7 +36,9 @@ They trap you in full-screen interactive TUIs, demand bloated runtimes, spawn au
 - ⚡ **Instant Execution**: Native standalone binary. Starts immediately with near-zero latency.
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
 - 🌊 **Token Streaming**: Real-time token streaming straight to stdout.
+- 💡 **Visual Feedback**: Shows `[<model> thinking...]` on stderr as soon as you submit, erasing cleanly once tokens begin streaming.
 - 🧠 **Context Awareness**: Natural follow-ups within the same terminal session (`ask "now filter by status running"`).
+- 📝 **Interactive Multiline Buffer**: Type `ask` alone to paste multiline logs, scripts, or pipelines byte-for-byte until OS EOF (`Ctrl+D` / `Ctrl+Z`).
 - 🔌 **Standard Unix Piping**: Feed command outputs or diffs directly (`git diff | ask "summarize changes"`).
 - 🧹 **Zero Configuration Friction**: Auto-prompts for your OpenRouter key on first run and saves locally to `~/.config/ask/config.json`.
 
@@ -45,7 +47,7 @@ They trap you in full-screen interactive TUIs, demand bloated runtimes, spawn au
 ## Installation
 
 ### 1. Ubuntu / Debian (`apt`)
-Add repository and install natively via `apt`:
+Add the repository and install natively via `apt`:
 ```bash
 # Add repository source
 echo "deb [trusted=yes] https://mugunth13labs.github.io/cli-ask/ stable main" | sudo tee /etc/apt/sources.list.d/cli-ask.list
@@ -65,7 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.
 irm https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.ps1 | iex
 ```
 
-### 4. Direct `.deb` / Binary Download
+### 4. Manual Download
 Pre-compiled native binaries and `.deb` packages are available directly on the [Releases](https://github.com/mugunth13labs/cli-ask/releases) page:
 - **Debian / Ubuntu Packages**: `cli-ask_*_amd64.deb`, `cli-ask_*_arm64.deb` (`sudo apt install ./cli-ask_*.deb`)
 - **Linux Binaries**: `ask-linux-amd64`, `ask-linux-arm64`
@@ -85,15 +87,64 @@ ask --set-key sk-or-v1-xxxxxxxx
 
 ---
 
-## Usage & Workflows
+## Usage Guide & How to Handle Edge Cases
 
-### Direct Queries
+### 1. Direct Queries & Unquoted Words
+You can pass single-line queries with or without quotes:
 ```bash
 ask "explain how to configure a systemd service"
 ask what does the -F flag do in awk
 ```
 
-### Conversational Follow-ups (Scoped to Active Shell)
+### 2. Literal Command Flags (Preserving Option Flags)
+`ask` recognizes that commands often contain their own flags. Unrecognized flags are preserved as prompt text:
+```bash
+ask ps -eo pid,cmd --sort
+ask tar -czvf archive.tar.gz
+```
+
+### 3. Edge Case: Shell Operators (`|`, `>`, `&`, `;`)
+> [!IMPORTANT]
+> **Why `ask ps aux | grep root` doesn't work as a single query**:
+> In all operating systems (Bash, Zsh, PowerShell), the shell intercepts pipe (`|`) and redirection (`>`, `&`, `;`) operators **before** passing arguments to any program.
+>
+> If you run:
+> ```bash
+> ask ps aux | grep root   # ❌ The shell runs ask, then pipes ask's output into grep!
+> ```
+>
+> **The Two Proper Ways to Query Complex Command Chains:**
+>
+> **Method A: Wrap in single quotes**:
+> ```bash
+> ask 'ps -eo pid,ppid,stat,cmd | awk "NR==1 || \$3==\"Z\"" | sort -r'
+> ```
+>
+> **Method B: Interactive Multiline Mode (Recommended for long snippets)**:
+> Simply run `ask` with no arguments, paste the entire pipeline verbatim, and press `Ctrl+D` (`Ctrl+Z` then `Enter` on Windows):
+> ```bash
+> $ ask
+> Type or paste prompt (press Ctrl+D to submit, Ctrl+C to cancel):
+> ps -eo pid,ppid,stat,cmd | awk 'NR==1 || $3=="Z" || $3=="D"' | sort -r -k3,3 | nl -v 0
+> explain what this does
+> [Ctrl+D]
+> ```
+> Inside multiline mode, the shell never intercepts or interprets any characters.
+
+### 4. Edge Case: Flag Disambiguation & The `--` Separator
+What if you want to ask a question about an `ask` flag itself, like asking *"what does --config do?"*
+
+- **Standalone Tool Actions**: Flags like `--config`, `--help`, `--version`, and `--clear` only trigger tool actions when entered **alone** (`ask --config`).
+- **If Extra Arguments Are Present**: If you type `ask --config ps --help`, `ask` treats it as a **question** for the AI, rather than dumping your settings.
+- **The Absolute Escape Hatch (`--`)**: If you want to guarantee that zero tokens are interpreted as `ask` options, use standard POSIX `--`:
+  ```bash
+  ask -- --clear
+  ask -- --config
+  ```
+  Everything following `--` is treated strictly as literal prompt text.
+
+### 5. Conversational Follow-ups (Scoped to Active Shell)
+Context is remembered within the **same terminal tab**:
 ```bash
 $ ask "how to check listening ports with ss?"
 ss -tulpn
@@ -102,19 +153,20 @@ $ ask "filter only tcp sockets"
 ss -tulpn | grep tcp
 ```
 
-### Stdin Piping
+### 6. Standard Input Piping
+Feed file outputs, diffs, or logs directly into `ask`:
 ```bash
 # Debug system logs
 journalctl -xe --no-pager | tail -n 50 | ask "what caused this failure?"
 
-# Review git changes
+# Review git diffs
 git diff | ask "review this diff for potential performance regressions"
 
-# Inspect network state
+# Inspect active services
 netstat -tulpn | ask "which ports are exposed publicly?"
 ```
 
-### Session Controls
+### 7. Session Controls
 ```bash
 # Clear conversation history for the current terminal window
 ask --clear   # or ask -c
@@ -123,12 +175,13 @@ ask --clear   # or ask -c
 ask --no-context "what is the default ssh port?"
 ```
 
-### Model Switching
+### 8. Switching Models
+By default, `ask` uses top-performing free models like `nvidia/nemotron-3.5-lightning:free`. You can switch to any free or paid model on OpenRouter:
 ```bash
 # Check current config & active session
 ask --config
 
-# Switch to any model on OpenRouter (free or paid)
+# Switch models
 ask --set-model google/gemma-4-31b-it:free
 ask --set-model deepseek/deepseek-r1:free
 ask --set-model anthropic/claude-3.5-sonnet
