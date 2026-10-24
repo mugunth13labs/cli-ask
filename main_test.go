@@ -5,6 +5,69 @@ import (
 	"testing"
 )
 
+func TestParseCLIArgsStandalone(t *testing.T) {
+	cases := []struct {
+		input    []string
+		expected string
+	}{
+		{[]string{"--help"}, "help"},
+		{[]string{"-h"}, "help"},
+		{[]string{"help"}, "help"},
+		{[]string{"--version"}, "version"},
+		{[]string{"-v"}, "version"},
+		{[]string{"--config"}, "config"},
+		{[]string{"--clear"}, "clear"},
+		{[]string{"-c"}, "clear"},
+	}
+
+	for _, c := range cases {
+		p := parseCLIArgs(c.input)
+		if p.Action != c.expected {
+			t.Errorf("expected action %q for %v, got %q", c.expected, c.input, p.Action)
+		}
+	}
+}
+
+func TestParseCLIArgsDisambiguation(t *testing.T) {
+	// If extra args exist, --config or --help should NOT trigger action, but be treated as prompt
+	p := parseCLIArgs([]string{"--config", "ps", "--help"})
+	if p.Action != "query" {
+		t.Errorf("expected action 'query', got %q", p.Action)
+	}
+	if p.Prompt != "--config ps --help" {
+		t.Errorf("expected prompt '--config ps --help', got %q", p.Prompt)
+	}
+
+	// Normal command with flags
+	p2 := parseCLIArgs([]string{"ps", "-ef", "--sort", "-p"})
+	if p2.Action != "query" {
+		t.Errorf("expected action 'query', got %q", p2.Action)
+	}
+	if p2.Prompt != "ps -ef --sort -p" {
+		t.Errorf("expected prompt 'ps -ef --sort -p', got %q", p2.Prompt)
+	}
+}
+
+func TestParseCLIArgsEscapeSeparator(t *testing.T) {
+	p := parseCLIArgs([]string{"--", "--clear", "-c", "--config"})
+	if p.Action != "query" {
+		t.Errorf("expected action 'query', got %q", p.Action)
+	}
+	if p.Prompt != "--clear -c --config" {
+		t.Errorf("expected prompt '--clear -c --config', got %q", p.Prompt)
+	}
+}
+
+func TestParseCLIArgsNoContext(t *testing.T) {
+	p := parseCLIArgs([]string{"--no-context", "explain", "this"})
+	if p.UseContext != false {
+		t.Errorf("expected UseContext to be false")
+	}
+	if p.Prompt != "explain this" {
+		t.Errorf("expected prompt 'explain this', got %q", p.Prompt)
+	}
+}
+
 func TestCompactHistoryUnderLimit(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "hello"},
@@ -21,7 +84,6 @@ func TestCompactHistoryUnderLimit(t *testing.T) {
 
 func TestCompactHistoryExceedingLimit(t *testing.T) {
 	var messages []Message
-	// Create 14 messages (7 turns)
 	for i := 0; i < 7; i++ {
 		messages = append(messages,
 			Message{Role: "user", Content: "query"},
@@ -30,8 +92,6 @@ func TestCompactHistoryExceedingLimit(t *testing.T) {
 	}
 
 	compacted := compactHistory(messages)
-
-	// Should have 1 system summary message + maxRecentMessages (6) = 7 messages total
 	expectedLen := maxRecentMessages + 1
 	if len(compacted) != expectedLen {
 		t.Fatalf("expected %d compacted messages, got %d", expectedLen, len(compacted))

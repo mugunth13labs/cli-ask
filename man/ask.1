@@ -1,9 +1,15 @@
-.TH ASK 1 "October 2026" "cli-ask 0.2.0" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.0" "User Commands"
 .SH NAME
 ask \- non-intrusive terminal AI assistant with session-scoped context
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
+.br
+.B ask
+[\fI--no-context\fR]
+.br
+.B ask
+\fB--\fR \fIPROMPT\fR
 .br
 .I COMMAND
 |
@@ -15,6 +21,8 @@ is a lightweight, zero-dependency command-line utility designed for system admin
 .PP
 Unlike interactive TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately.
 .PP
+When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode, accepting literal text, code snippets, or command chains until terminated by standard OS EOF (\fBCtrl+D\fR on Linux/macOS, \fBCtrl+Z\fR then Enter on Windows).
+.PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
 
 .SH OPTIONS
@@ -24,6 +32,9 @@ Clear the conversation history for the current terminal session.
 .TP
 .B \-\-no\-context
 Execute the query as a standalone request without loading or updating the session history.
+.TP
+.B \-\-
+POSIX end-of-options delimiter. All following arguments are treated strictly as literal prompt text, ignoring any dashes or flags.
 .TP
 .BR \-\-set\-key " " \fIAPI_KEY\fR
 Save your OpenRouter API key to the user configuration file.
@@ -58,6 +69,12 @@ Session-scoped conversation history for the active terminal shell.
 .B Quick command lookup:
 ask "how to find listening ports in linux"
 .TP
+.B Passing literal command arguments:
+ask ps -eo pid,cmd --sort
+.TP
+.B Interactive multiline entry:
+ask
+.TP
 .B Follow-up in same terminal:
 ask "filter only tcp ones"
 .TP
@@ -68,7 +85,7 @@ git diff | ask "summarize these changes"
 ask --clear
 
 .SH AUTHOR
-Maintained by mugunth13labs <https://github.com/mugunth13labs/cli-ask>.
+Maintained by Mugunthan <https://github.com/mugunth13labs>.
 .SH "REPORTING BUGS"
 Report bugs to <https://github.com/mugunth13labs/cli-ask/issues>.
 .SH COPYRIGHT

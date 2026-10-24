@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
 const (
-	version       = "0.2.0"
+	version       = "0.3.0"
 	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModel  = "nvidia/nemotron-3.5-lightning:free"
 	systemPrompt  = "You are a concise, helpful terminal CLI assistant. Provide direct, succinct answers without unnecessary fluff, pleasantries, or verbose commentary unless explicitly asked. Format code or commands clearly."
@@ -61,6 +62,86 @@ type StreamResponse struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error,omitempty"`
+}
+
+type ParsedArgs struct {
+	Action     string // "help", "version", "config", "clear", "set-key", "set-model", "query"
+	ActionArg  string // value for --set-key or --set-model
+	Prompt     string // collected prompt tokens
+	UseContext bool   // true unless --no-context is provided
+}
+
+func parseCLIArgs(args []string) ParsedArgs {
+	result := ParsedArgs{
+		Action:     "query",
+		UseContext: true,
+	}
+
+	if len(args) == 0 {
+		return result
+	}
+
+	// 1. Check for standalone commands (len == 1)
+	if len(args) == 1 {
+		switch args[0] {
+		case "-h", "--help", "help":
+			result.Action = "help"
+			return result
+		case "-v", "--version", "version":
+			result.Action = "version"
+			return result
+		case "-c", "--clear":
+			result.Action = "clear"
+			return result
+		case "--config":
+			result.Action = "config"
+			return result
+		}
+	}
+
+	// 2. Check for parametric commands (--set-key / --set-model)
+	if args[0] == "--set-key" {
+		result.Action = "set-key"
+		if len(args) > 1 {
+			result.ActionArg = args[1]
+		}
+		return result
+	}
+	if args[0] == "--set-model" {
+		result.Action = "set-model"
+		if len(args) > 1 {
+			result.ActionArg = args[1]
+		}
+		return result
+	}
+
+	// 3. Process query tokens and handle `--` separator & `--no-context`
+	var promptTokens []string
+	literalMode := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		if literalMode {
+			promptTokens = append(promptTokens, arg)
+			continue
+		}
+
+		if arg == "--" {
+			literalMode = true
+			continue
+		}
+
+		if arg == "--no-context" {
+			result.UseContext = false
+			continue
+		}
+
+		promptTokens = append(promptTokens, arg)
+	}
+
+	result.Prompt = strings.Join(promptTokens, " ")
+	return result
 }
 
 func getConfigDir() (string, error) {
@@ -114,7 +195,7 @@ func loadSession(sessionID string) (*Session, error) {
 
 	data, err := os.ReadFile(sPath)
 	if err != nil {
-		return s, nil // no session file yet
+		return s, nil
 	}
 
 	if err := json.Unmarshal(data, s); err != nil {
@@ -158,7 +239,6 @@ func clearSession(sessionID string) error {
 	return nil
 }
 
-// compactHistory performs token-aware auto-compaction
 func compactHistory(messages []Message) []Message {
 	if len(messages) <= maxRecentMessages {
 		return messages
@@ -173,7 +253,6 @@ func compactHistory(messages []Message) []Message {
 		return messages
 	}
 
-	// Split into older messages to compact and recent messages to keep verbatim
 	splitIdx := len(messages) - maxRecentMessages
 	older := messages[:splitIdx]
 	recent := messages[splitIdx:]
@@ -185,12 +264,10 @@ func compactHistory(messages []Message) []Message {
 		if m.Role == "assistant" {
 			prefix = "Assistant"
 		}
-		// Truncate long past responses to 200 characters each in summary
 		content := strings.TrimSpace(m.Content)
 		if len(content) > 200 {
 			content = content[:197] + "..."
 		}
-		// Single-line format
 		content = strings.ReplaceAll(content, "\n", " ")
 		summaryBuilder.WriteString(fmt.Sprintf("- %s: %s\n", prefix, content))
 	}
@@ -270,13 +347,36 @@ func promptAPIKey() (string, error) {
 	return key, nil
 }
 
+func readInteractivePrompt() (string, error) {
+	eofHint := "Ctrl+D"
+	if runtime.GOOS == "windows" {
+		eofHint = "Ctrl+Z then Enter"
+	}
+
+	fmt.Fprintf(os.Stderr, "Type or paste prompt (press %s to submit, Ctrl+C to cancel):\n", eofHint)
+
+	bytesRead, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(bytesRead)), nil
+}
+
 func printHelp() {
+	eofHint := "Ctrl+D"
+	if runtime.GOOS == "windows" {
+		eofHint = "Ctrl+Z then Enter"
+	}
+
 	fmt.Printf(`ask v%s — Lightning-fast terminal AI query tool with session context
 
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
+  ask                           Interactive multiline entry (ends with %s)
   echo "code" | ask "explain"   Pipe stdin to ask
+  ask -- <prompt>               Treat everything after -- as literal prompt
 
 Session Memory:
   ask --clear, -c               Clear current terminal's conversation history
@@ -291,31 +391,20 @@ Configuration:
 
 Environment:
   OPENROUTER_API_KEY            Overrides configured API key
-`, version, defaultModel)
+`, version, eofHint, defaultModel)
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) != 0 {
-			printHelp()
-			return
-		}
-	}
+	parsed := parseCLIArgs(os.Args[1:])
 
-	firstArg := ""
-	if len(os.Args) > 1 {
-		firstArg = os.Args[1]
-	}
-
-	switch firstArg {
-	case "-v", "--version", "version":
-		fmt.Printf("ask v%s\n", version)
-		return
-	case "-h", "--help", "help":
+	switch parsed.Action {
+	case "help":
 		printHelp()
 		return
-	case "-c", "--clear":
+	case "version":
+		fmt.Printf("ask v%s\n", version)
+		return
+	case "clear":
 		sessionID := getSessionID()
 		if err := clearSession(sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "Error clearing session: %v\n", err)
@@ -323,7 +412,7 @@ func main() {
 		}
 		fmt.Printf("Session context cleared (%s).\n", sessionID)
 		return
-	case "--config":
+	case "config":
 		cfg, _ := loadConfig()
 		cfgPath, _ := getConfigPath()
 		fmt.Printf("Config file: %s\n", cfgPath)
@@ -337,26 +426,26 @@ func main() {
 		fmt.Printf("API Key: %s\n", maskedKey)
 		fmt.Printf("Session: %s\n", getSessionID())
 		return
-	case "--set-key":
-		if len(os.Args) < 3 {
+	case "set-key":
+		if parsed.ActionArg == "" {
 			fmt.Println("Error: Missing key argument. Usage: ask --set-key <YOUR_API_KEY>")
 			os.Exit(1)
 		}
 		cfg, _ := loadConfig()
-		cfg.APIKey = os.Args[2]
+		cfg.APIKey = parsed.ActionArg
 		if err := saveConfig(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Println("API key saved successfully.")
 		return
-	case "--set-model":
-		if len(os.Args) < 3 {
+	case "set-model":
+		if parsed.ActionArg == "" {
 			fmt.Println("Error: Missing model argument. Usage: ask --set-model <MODEL_NAME>")
 			os.Exit(1)
 		}
 		cfg, _ := loadConfig()
-		cfg.Model = os.Args[2]
+		cfg.Model = parsed.ActionArg
 		if err := saveConfig(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
 			os.Exit(1)
@@ -365,31 +454,35 @@ func main() {
 		return
 	}
 
-	// Parse arguments, check for --no-context
-	useContext := true
-	var promptArgs []string
-	for i := 1; i < len(os.Args); i++ {
-		arg := os.Args[i]
-		if arg == "--no-context" {
-			useContext = false
-		} else {
-			promptArgs = append(promptArgs, arg)
-		}
-	}
+	userPrompt := parsed.Prompt
 
-	userPrompt := strings.Join(promptArgs, " ")
-
-	// Read piped input if available
+	// Check stdin state
 	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
+	isTerminal := (stat.Mode() & os.ModeCharDevice) != 0
+
+	// If no prompt in args:
+	if strings.TrimSpace(userPrompt) == "" {
+		if isTerminal {
+			// Interactive multiline entry terminated by OS EOF
+			prompt, err := readInteractivePrompt()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+				os.Exit(1)
+			}
+			userPrompt = prompt
+		} else {
+			// Piped stdin with no args
+			stdinBytes, err := io.ReadAll(os.Stdin)
+			if err == nil {
+				userPrompt = strings.TrimSpace(string(stdinBytes))
+			}
+		}
+	} else if !isTerminal {
+		// Prompt given in args + piped stdin attached
 		stdinBytes, err := io.ReadAll(os.Stdin)
 		if err == nil && len(stdinBytes) > 0 {
 			stdinText := strings.TrimSpace(string(stdinBytes))
-			if userPrompt != "" {
-				userPrompt = userPrompt + "\n\nContext:\n" + stdinText
-			} else {
-				userPrompt = stdinText
-			}
+			userPrompt = userPrompt + "\n\nContext:\n" + stdinText
 		}
 	}
 
@@ -421,15 +514,14 @@ func main() {
 
 	sessionID := getSessionID()
 	var currentSession *Session
-	if useContext {
+	if parsed.UseContext {
 		currentSession, _ = loadSession(sessionID)
 	}
 
-	// Prepare messages array
 	var apiMessages []Message
 	apiMessages = append(apiMessages, Message{Role: "system", Content: systemPrompt})
 
-	if useContext && currentSession != nil && len(currentSession.Messages) > 0 {
+	if parsed.UseContext && currentSession != nil && len(currentSession.Messages) > 0 {
 		compacted := compactHistory(currentSession.Messages)
 		apiMessages = append(apiMessages, compacted...)
 	}
@@ -517,8 +609,7 @@ func main() {
 		fmt.Println()
 	}
 
-	// Save to session history if enabled
-	if useContext && currentSession != nil && hasOutput {
+	if parsed.UseContext && currentSession != nil && hasOutput {
 		currentSession.Messages = append(currentSession.Messages,
 			Message{Role: "user", Content: userPrompt},
 			Message{Role: "assistant", Content: fullResponseBuilder.String()},

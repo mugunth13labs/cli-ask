@@ -1,3 +1,11 @@
+cli-ask (0.3.0-1) unstable; urgency=medium
+
+  * Add interactive multiline EOF entry mode (Ctrl+D / Ctrl+Z).
+  * Improve flag disambiguation and literal command argument handling.
+  * Support POSIX '--' argument separator.
+
+ -- Mugunthan <mugunth13@proton.me>  Sat, 24 Oct 2026 23:00:00 +0800
+
 cli-ask (0.2.0-1) unstable; urgency=medium
 
   * Initial release (Closes: #XXXXXX).
