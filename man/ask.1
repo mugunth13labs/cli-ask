@@ -1,4 +1,4 @@
-.TH ASK 1 "October 2026" "cli-ask 0.3.0" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.1" "User Commands"
 .SH NAME
 ask \- non-intrusive terminal AI assistant with session-scoped context
 .SH SYNOPSIS
@@ -32,6 +32,9 @@ Clear the conversation history for the current terminal session.
 .TP
 .B \-\-no\-context
 Execute the query as a standalone request without loading or updating the session history.
+.TP
+.B \-\-update\-self ", " \-\-update
+Check for the latest release on GitHub and update the running binary in-place.
 .TP
 .B \-\-
 POSIX end-of-options delimiter. All following arguments are treated strictly as literal prompt text, ignoring any dashes or flags.
@@ -77,6 +80,9 @@ ask
 .TP
 .B Follow-up in same terminal:
 ask "filter only tcp ones"
+.TP
+.B Self-updating to latest version:
+ask --update-self
 .TP
 .B Standard input piping:
 git diff | ask "summarize these changes"

@@ -5,7 +5,7 @@ REPO="mugunth13labs/cli-ask"
 LATEST_TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$LATEST_TAG" ]; then
-    LATEST_TAG="v0.1.1"
+    LATEST_TAG="v0.3.1"
 fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

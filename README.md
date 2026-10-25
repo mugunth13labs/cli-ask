@@ -37,6 +37,7 @@ They trap you in full-screen interactive TUIs, demand bloated runtimes, spawn au
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
 - 🌊 **Token Streaming**: Real-time token streaming straight to stdout.
 - 💡 **Visual Feedback**: Shows `[<model> thinking...]` on stderr as soon as you submit, erasing cleanly once tokens begin streaming.
+- 🔄 **Seamless Updates**: Built-in self-updater (`ask --update-self`) to stay on the latest version across all platforms.
 - 🧠 **Context Awareness**: Natural follow-ups within the same terminal session (`ask "now filter by status running"`).
 - 📝 **Interactive Multiline Buffer**: Type `ask` alone to paste multiline logs, scripts, or pipelines byte-for-byte until OS EOF (`Ctrl+D` / `Ctrl+Z`).
 - 🔌 **Standard Unix Piping**: Feed command outputs or diffs directly (`git diff | ask "summarize changes"`).
@@ -46,33 +47,28 @@ They trap you in full-screen interactive TUIs, demand bloated runtimes, spawn au
 
 ## Installation
 
-### 1. Ubuntu / Debian (`apt`)
-Add the repository and install natively via `apt`:
-```bash
-# Add repository source
-echo "deb [trusted=yes] https://mugunth13labs.github.io/cli-ask/ stable main" | sudo tee /etc/apt/sources.list.d/cli-ask.list
-
-# Update and install
-sudo apt update
-sudo apt install cli-ask
-```
-
-### 2. Linux & macOS (One-line shell script)
+### 1. Linux & macOS (One-line shell script)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.sh | sh
 ```
 
-### 3. Windows (PowerShell one-line install)
+### 2. Windows (PowerShell one-line install)
 ```powershell
 irm https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.ps1 | iex
 ```
 
+### 3. Updating to Latest Version
+Once installed, you can update `ask` directly in-place from anywhere in your terminal:
+```bash
+ask --update-self
+```
+*(On Windows, `install.ps1` safely replaces locked executables; on Linux, run with `sudo ask --update-self` if installed in `/usr/local/bin`).*
+
 ### 4. Manual Download
-Pre-compiled native binaries and `.deb` packages are available directly on the [Releases](https://github.com/mugunth13labs/cli-ask/releases) page:
-- **Debian / Ubuntu Packages**: `cli-ask_*_amd64.deb`, `cli-ask_*_arm64.deb` (`sudo apt install ./cli-ask_*.deb`)
-- **Linux Binaries**: `ask-linux-amd64`, `ask-linux-arm64`
-- **macOS Binaries**: `ask-darwin-arm64` (Apple Silicon), `ask-darwin-amd64` (Intel)
-- **Windows Binaries**: `ask-windows-amd64.exe`
+Pre-compiled native binaries are available directly on the [Releases](https://github.com/mugunth13labs/cli-ask/releases) page:
+- **Linux**: `ask-linux-amd64`, `ask-linux-arm64`
+- **macOS**: `ask-darwin-arm64` (Apple Silicon), `ask-darwin-amd64` (Intel)
+- **Windows**: `ask-windows-amd64.exe`
 
 ---
 
@@ -134,7 +130,7 @@ ask tar -czvf archive.tar.gz
 ### 4. Edge Case: Flag Disambiguation & The `--` Separator
 What if you want to ask a question about an `ask` flag itself, like asking *"what does --config do?"*
 
-- **Standalone Tool Actions**: Flags like `--config`, `--help`, `--version`, and `--clear` only trigger tool actions when entered **alone** (`ask --config`).
+- **Standalone Tool Actions**: Flags like `--config`, `--help`, `--version`, `--clear`, and `--update-self` only trigger tool actions when entered **alone** (`ask --config`).
 - **If Extra Arguments Are Present**: If you type `ask --config ps --help`, `ask` treats it as a **question** for the AI, rather than dumping your settings.
 - **The Absolute Escape Hatch (`--`)**: If you want to guarantee that zero tokens are interpreted as `ask` options, use standard POSIX `--`:
   ```bash

@@ -1,3 +1,11 @@
+cli-ask (0.3.1-1) unstable; urgency=medium
+
+  * Add in-place self-updater command (ask --update-self).
+  * Fix Windows file-lock during in-place binary replacement.
+  * Improve installation docs and package discovery.
+
+ -- Mugunthan <mugunth13@proton.me>  Sun, 25 Oct 2026 21:00:00 +0800
+
 cli-ask (0.3.0-1) unstable; urgency=medium
 
   * Add interactive multiline EOF entry mode (Ctrl+D / Ctrl+Z).

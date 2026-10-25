@@ -18,6 +18,8 @@ func TestParseCLIArgsStandalone(t *testing.T) {
 		{[]string{"--config"}, "config"},
 		{[]string{"--clear"}, "clear"},
 		{[]string{"-c"}, "clear"},
+		{[]string{"--update-self"}, "update-self"},
+		{[]string{"--update"}, "update-self"},
 	}
 
 	for _, c := range cases {
