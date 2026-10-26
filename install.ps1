@@ -43,8 +43,13 @@ Remove-Item $OldPath -Force -ErrorAction SilentlyContinue
 
 # Ensure directory is on User PATH
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath -notlike "*$InstallDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+if (-not $UserPath) {
+    [Environment]::SetEnvironmentVariable("Path", $InstallDir, "User")
+    $env:Path = "$env:Path;$InstallDir"
+    Write-Host "Added $InstallDir to user PATH."
+} elseif ($UserPath -notlike "*$InstallDir*") {
+    $CleanPath = $UserPath.TrimEnd(';')
+    [Environment]::SetEnvironmentVariable("Path", "$CleanPath;$InstallDir", "User")
     $env:Path = "$env:Path;$InstallDir"
     Write-Host "Added $InstallDir to user PATH."
 }
