@@ -89,7 +89,80 @@ func readChatPrompt(reader *bufio.Reader, isInteractive bool) (string, error) {
 	return readChatPromptCooked(reader)
 }
 
+func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) error {
+	fd := os.Stdout.Fd()
+	state, err := makeRaw(fd)
+	if err != nil {
+		return fmt.Errorf("failed to make raw: %w", err)
+	}
+
+	w, h := getTerminalSize(fd)
+	if w < 40 {
+		w = 80
+	}
+	if h < 10 {
+		h = 24
+	}
+
+	sessionID := getSessionID()
+	session, err := loadSession(sessionID)
+	if err != nil {
+		session = &Session{
+			ID:       sessionID,
+			Messages: []Message{},
+		}
+	}
+
+	// Enter Alternate Screen
+	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h")
+	_ = os.Stdout.Sync()
+
+	chat := NewChatUI(cfg, session, opts, initialPrompt, w, h)
+
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			_ = restoreTerm(fd, state)
+			_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
+			_ = os.Stdout.Sync()
+		})
+	}
+	defer cleanup()
+
+	render := func() {
+		var sb strings.Builder
+		sb.WriteString(ansiHideCursor)
+		for r := 0; r < h; r++ {
+			sb.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[K", r+1))
+			sb.WriteString(chat.RenderRow(r))
+		}
+		cRow, cCol := chat.CursorPosition()
+		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", cRow+1, cCol+1, ansiShowCursor))
+		_, _ = os.Stdout.WriteString(sb.String())
+		_ = os.Stdout.Sync()
+	}
+
+	chat.OnNeedRender = render
+	render()
+
+	buf := make([]byte, 512)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return nil
+		}
+		if shouldExit := chat.HandleKey(buf[:n]); shouldExit {
+			return nil
+		}
+		render()
+	}
+}
+
 func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
+	if opts.IsStdoutTerminal && isCharDevice(os.Stdin) {
+		return runChatUIStandalone(cfg, initialPrompt, opts)
+	}
+
 	sessionID := getSessionID()
 	session, err := loadSession(sessionID)
 	if err != nil {
