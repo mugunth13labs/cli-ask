@@ -25,6 +25,7 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 `ask` is built on a different principle: **The Unix Philosophy.**
 
 - **A Filter, Not a Framework**: `ask` behaves like `grep`, `awk`, or `curl`. You run a command, it streams the concise answer straight to standard output, and exits immediately. Your prompt is ready for the next task.
+- **Isolated Alternate Screen Composer**: Running `ask` with no prompt opens a temporary composer in the Alternate Screen Buffer (like `man` or `less`). You can edit, navigate with arrows, and backspace across lines. Submitting exits the alternate screen, restores your shell, and prints the AI response cleanly to stdout.
 - **Pure Code When You Need Code**: Generates raw, syntactically valid code starting directly with shebangs or declarations—zero conversational preambles, zero markdown code fences, and zero alien ASCII title banners breaking your scripts.
 - **Session-Scoped by Design**: Memory is strictly scoped to the parent shell process (PPID). Two terminal tabs or tmux panes on the same machine never contaminate each other's context. Your Kubernetes debugging in Tab 1 never bleeds into your Terraform work in Tab 2.
 - **Auto-Compacting, Not Discarding**: Rather than dropping context abruptly with an arbitrary timer, long multi-turn sessions automatically roll into concise summaries behind the scenes. Zero latency overhead, zero token window blowouts.
@@ -37,16 +38,16 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 ## Features
 
 - ⚡ **Instant Execution**: Native standalone binary. Starts immediately with near-zero latency.
+- 📝 **Alternate Screen Micro-Editor**: Isolated prompt composer with full arrow-key navigation, cross-line Backspace, and bracketed paste safety.
 - 💻 **Pure Code Generation (`--cg`, `--codegen`)**: Output exact, runnable code or scripts without title headers or markdown fences.
 - 🤖 **Smart Codegen Auto-Detection**: Automatically activates codegen mode when saving to script/code files (`.sh`, `.py`, `.pbs`, `.yaml`, etc.) or piping existing scripts.
-- 💬 **Continuous Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction with in-session model switching.
+- 💬 **Immersive Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction in the Alternate Screen Buffer.
 - 📁 **Direct File Output**: Save responses directly using `ask -o <file>` (overwrite) or `ask -a <file>` (append).
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
 - 🌊 **Token Streaming**: Real-time token streaming straight to stdout or files.
 - 💡 **Smart Progress & Splitters**: Shows live progress on stderr during file redirection (`[streaming to output...] -> [done]`); interactive sessions display a subtle divider line (`─── ask [model] ──────────`).
 - 🔄 **Seamless Updates**: Built-in self-updater (`ask --update-self`) to stay on the latest version across all platforms.
 - 🧠 **Context Awareness**: Natural follow-ups within the same terminal session (`ask "now filter by status running"`).
-- 📝 **Standardized Multiline Input**: `Enter` inserts a newline; submit anytime with `Ctrl+Enter`, an empty line, or `Ctrl+D`.
 - 🔌 **Standard Unix Piping**: Feed command outputs or diffs directly (`git diff | ask "summarize changes"`).
 - 🧹 **Zero Configuration Friction**: Auto-prompts for your OpenRouter key on first run and saves locally to `~/.config/ask/config.json`.
 
@@ -99,7 +100,22 @@ ask "explain how to configure a systemd service"
 ask what does the -F flag do in awk
 ```
 
-### 2. Pure Code Generation Mode (`--cg`, `--codegen`)
+### 2. Interactive Multiline Composer (Alternate Screen)
+Simply run `ask` with no prompt arguments to open the micro-editor in a temporary Alternate Screen Buffer (like `man` or `less`):
+```bash
+$ ask
+```
+Inside the composer:
+- **Full Navigation**: Use Arrow Keys ($\uparrow, \downarrow, \leftarrow, \rightarrow$) to move around.
+- **Cross-Line Backspace**: Pressing Backspace on column 0 pulls the line up and merges it into the line above.
+- **Paste Safe**: Paste multi-paragraph text or code with blank lines safely (Bracketed Paste Mode).
+- **Literal Characters**: Characters like `;`, `>`, `|`, `&`, `$`, `"`, `(`, `)` are treated 100% literally without shell interference.
+- **Submit**: Press `Ctrl+Enter` (or `Ctrl+D`).
+- **Cancel**: Press `Ctrl+C` or type `/q` / `/exit`.
+
+Upon pressing `Ctrl+Enter`, the composer exits immediately, cleanly restores your terminal screen, and streams the AI answer to `stdout`!
+
+### 3. Pure Code Generation Mode (`--cg`, `--codegen`)
 When generating or refactoring scripts, configs, or code, use `--cg` to ensure the output contains strictly raw, executable code without any title headers, ASCII underlines, conversational filler, or markdown code fences:
 ```bash
 # Explicit code generation
@@ -116,13 +132,13 @@ cat job.pbs | ask "remove alien lines and request 2 nodes with 64gb memory" > jo
 - Outputting to code/script extensions (`.sh`, `.py`, `.pbs`, `.slurm`, `.yaml`, `.json`, etc.) with `-o` or `-a`.
 - The input stream starts with a shebang (`#!/`) or contains script keywords.
 
-### 3. Continuous Chatbot Mode (`ask -i`, `ask --chatbot`)
+### 4. Continuous Chatbot Mode (`ask -i`, `ask --chatbot`)
 When you want an uninterrupted back-and-forth dialogue without exiting to the shell between each turn:
 ```bash
 $ ask -i
-ask v0.3.4 — Continuous Chat Mode
+ask v0.3.5 — Continuous Chat Mode
 Model: nvidia/nemotron-3.5-lightning:free | Session: session-12345
-Type message (Enter for newline, Ctrl+Enter or blank Enter to send). Commands: /clear, /model, exit
+Send: Ctrl+Enter (or Ctrl+D) | Newline: Enter | Exit: exit, /q | Cancel: Ctrl+C
 
 >>> how do I inspect docker container network interfaces?
 ─── ask [nvidia/nemotron-3.5-lightning:free] ───────────────────────────
@@ -137,24 +153,16 @@ Run:
   docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container_id>
 
 >>> exit
-Goodbye!
 ```
-
-You can also pass an initial prompt or pipe chat logs into a file:
-```bash
-ask -i "start debugging this nginx error"
-ask -i -o session_notes.txt
-```
-
 Inside chatbot mode:
 - `Enter`: Inserts a newline so you can type paragraphs and code freely.
-- `Ctrl+Enter` or blank `Enter`: Submits your prompt to the AI.
+- `Ctrl+Enter` or `Ctrl+D`: Submits your prompt to the AI.
 - `/clear` or `/c`: Reset conversation history for the session.
 - `/model <name>`: Switch active model on the fly.
 - `/help`: Display in-chat help.
-- `exit`, `quit`, or `Ctrl+C`: Exit chatbot mode.
+- `exit`, `quit`, `/q`, `/exit`, or `Ctrl+C`: Exit chatbot mode and restore main terminal screen cleanly.
 
-### 4. Direct File Output (`-o`, `-a`)
+### 5. Direct File Output (`-o`, `-a`)
 Save answers directly to files without worrying about shell pipe syntax:
 ```bash
 # Overwrite or create file
@@ -162,19 +170,11 @@ ask -o docker_setup.md "create a compose file for postgres and redis"
 
 # Append to an existing notes file
 ask -a docker_setup.md "now add healthchecks for both services"
+
+# Launch composer and save result to file
+ask -o script.py
 ```
 The terminal displays live progress (`[saving to docker_setup.md...]` -> `[saved to docker_setup.md]`), keeping the output clean and uncorrupted.
-
-### 5. Interactive Multiline Entry
-Simply run `ask` with no prompt arguments to paste or type multiline scripts, configs, or queries:
-```bash
-$ ask
-Type or paste prompt (press Ctrl+Enter or blank line to submit, Ctrl+C to cancel):
-ps -eo pid,ppid,stat,cmd | awk 'NR==1 || $3=="Z" || $3=="D"' | sort -r -k3,3
-explain what this pipeline does
-
-# Press Enter on a blank line (or Ctrl+Enter) to submit
-```
 
 ### 6. Literal Command Flags (Preserving Option Flags)
 `ask` recognizes that commands often contain their own flags. Unrecognized flags are preserved as prompt text:

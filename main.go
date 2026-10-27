@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -12,7 +11,7 @@ import (
 )
 
 const (
-	version = "0.3.4"
+	version = "0.3.5"
 )
 
 var codeFileExts = map[string]bool{
@@ -186,50 +185,21 @@ func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool
 	return false
 }
 
-func readInteractivePrompt() (string, error) {
-	fmt.Fprintln(os.Stderr, "Type or paste prompt (press Ctrl+Enter or blank line to submit, Ctrl+C to cancel):")
-
-	reader := bufio.NewReader(os.Stdin)
-	var lines []string
-
-	for {
-		rawLine, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				if len(lines) > 0 {
-					break
-				}
-				return "", err
-			}
-			return "", err
-		}
-
-		line := strings.TrimRight(rawLine, "\r\n")
-
-		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
-		if hasCtrlEnter {
-			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
-			if strings.TrimSpace(line) != "" {
-				lines = append(lines, line)
-			}
-			break
-		}
-
-		// Blank line after content submits
-		if len(lines) > 0 && strings.TrimSpace(line) == "" {
-			break
-		}
-
-		// Initial empty lines ignored
-		if len(lines) == 0 && strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		lines = append(lines, line)
+func readInteractivePrompt(targetDesc string) (string, error) {
+	title := fmt.Sprintf("ask v%s — Multiline Prompt Composer", version)
+	subtitle := "Send: Ctrl+Enter | Move: Arrows/Backspace | Cancel: Ctrl+C | Exit: /q"
+	if targetDesc != "" {
+		subtitle = fmt.Sprintf("Target: %s | Send: Ctrl+Enter | Cancel: Ctrl+C | Exit: /q", targetDesc)
 	}
 
-	return strings.TrimSpace(strings.Join(lines, "\n")), nil
+	content, isCancelled, err := runComposer(title, subtitle)
+	if err != nil {
+		return "", err
+	}
+	if isCancelled {
+		os.Exit(0)
+	}
+	return strings.TrimSpace(content), nil
 }
 
 func readPipedStdinWithTimeout(maxWait time.Duration) string {
@@ -261,9 +231,9 @@ func printHelp() {
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
-  ask                           Interactive multiline entry (Ctrl+Enter or blank line to submit)
+  ask                           Interactive composer page (Ctrl+Enter to submit)
   ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
-  ask --chatbot, -i             Start continuous interactive chat session
+  ask --chatbot, -i             Start immersive continuous interactive chat session
   echo "code" | ask "explain"   Pipe stdin to ask
   ask -- <prompt>               Treat everything after -- as literal prompt
 
@@ -276,7 +246,7 @@ Code Generation:
   ask -o script.sh "prompt"     Auto-enables codegen mode for script/code file extensions
 
 Chatbot Mode:
-  ask --chatbot, -i             Continuous multi-turn chat session with REPL
+  ask --chatbot, -i             Immersive multi-turn chat session in alternate screen
   ask -i <prompt>               Start chat mode with an initial prompt
 
 Session Memory:
@@ -388,14 +358,34 @@ func main() {
 		}
 	}
 
+	queryOpts := QueryOptions{
+		OutputFile:       parsed.OutputFile,
+		AppendFile:       parsed.AppendFile,
+		IsStdoutTerminal: isStdoutTerminal,
+		IsStderrTerminal: isStderrTerminal,
+	}
+
+	// BUG 1 FIX: Dispatch chatbot immediately before reading stdin prompts
+	if parsed.Action == "chatbot" {
+		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
+			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	userPrompt := parsed.Prompt
 	var pipedStdinText string
 
 	// If no prompt in args:
 	if strings.TrimSpace(userPrompt) == "" {
 		if isStdinTerminal {
-			// Interactive multiline entry
-			prompt, err := readInteractivePrompt()
+			// Interactive composer page in alternate screen
+			targetDesc := parsed.OutputFile
+			if targetDesc == "" {
+				targetDesc = parsed.AppendFile
+			}
+			prompt, err := readInteractivePrompt(targetDesc)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
 				os.Exit(1)
@@ -417,22 +407,7 @@ func main() {
 	}
 
 	isCodeGen := detectCodeGen(&parsed, userPrompt, pipedStdinText)
-
-	queryOpts := QueryOptions{
-		OutputFile:       parsed.OutputFile,
-		AppendFile:       parsed.AppendFile,
-		IsCodeGen:        isCodeGen,
-		IsStdoutTerminal: isStdoutTerminal,
-		IsStderrTerminal: isStderrTerminal,
-	}
-
-	if parsed.Action == "chatbot" {
-		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
-			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
+	queryOpts.IsCodeGen = isCodeGen
 
 	if strings.TrimSpace(userPrompt) == "" {
 		printHelp()

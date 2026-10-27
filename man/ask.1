@@ -1,6 +1,6 @@
-.TH ASK 1 "October 2026" "cli-ask 0.3.4" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.5" "User Commands"
 .SH NAME
-ask \- non-intrusive terminal AI assistant with session-scoped context, code generation, and direct file output
+ask \- non-intrusive terminal AI assistant with session-scoped context, alternate screen composer, and code generation
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
@@ -33,11 +33,11 @@ is a lightweight, zero-dependency command-line utility designed for system admin
 .PP
 Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in terminal-native plain text with ASCII underlines and clean indentation, avoiding unrendered web markdown.
 .PP
+When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens a temporary composer in the Alternate Screen Buffer (similar to \fBman\fR or \fBless\fR). Inside the composer, you can freely paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without accidental execution. Upon pressing \fBCtrl+Enter\fR, the composer exits, restores your main terminal cleanly, and streams the AI response to stdout.
+.PP
+When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an immersive continuous chat session in the Alternate Screen Buffer. It supports multi-turn memory, in-chat commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fBexit\fR, \fB/q\fR), and cleanly restores your shell without polluting terminal history upon exiting.
+.PP
 When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.pbs\fR, etc.) or modifying scripts via pipes, \fBask\fR automatically activates pure code generation mode. In this mode, conversational fluff, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
-.PP
-When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous REPL session, allowing natural conversational back-and-forth prompting within the terminal without exiting after each turn.
-.PP
-When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode. Pressing \fBEnter\fR inserts a newline, allowing multiline scripts and prompts to be typed or pasted freely. The prompt is submitted upon pressing \fBCtrl+Enter\fR, entering a blank line (double \fBEnter\fR), or pressing \fBCtrl+D\fR.
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
 
@@ -53,7 +53,7 @@ Write the AI response directly to \fIFILE\fR (overwrites existing contents). Aut
 Append the AI response directly to \fIFILE\fR (creates file if it does not exist).
 .TP
 .BR \-i ", " \-\-chatbot " [" \fIPROMPT\fR "]"
-Start a continuous interactive chat session (REPL). If an initial prompt is provided, it is submitted upon launch.
+Start an immersive continuous interactive chat session in the Alternate Screen Buffer. If an initial prompt is provided, it is submitted upon launch.
 .TP
 .BR \-c ", " \-\-clear
 Clear the conversation history for the current terminal session.
@@ -94,8 +94,8 @@ Switch the active model for the chat session, or display current model if no arg
 .B /help
 Display available chatbot commands.
 .TP
-.BR exit ", " quit ", " /q
-Exit chat mode.
+.BR exit ", " quit ", " /q ", " /exit ", " /quit
+Exit chat mode and restore main terminal screen.
 
 .SH ENVIRONMENT
 .TP
@@ -112,20 +112,20 @@ Session-scoped conversation history for the active terminal shell.
 
 .SH EXAMPLES
 .TP
+.B Launch multiline composer in alternate screen:
+ask
+.TP
+.B Immersive continuous chatbot:
+ask -i
+.TP
 .B Generate pure PBS script without alien titles:
 ask -o job.pbs "generate a pbs script template"
-.TP
-.B Explicit code generation mode:
-ask --cg "write a python function to compute fibonacci"
 .TP
 .B Filter and refactor a script via pipe:
 cat test.pbs | ask "remove alien lines and request 2 nodes" > test2.pbs
 .TP
 .B Quick command lookup:
 ask "how to find listening ports in linux"
-.TP
-.B Continuous chatbot session:
-ask -i
 
 .SH AUTHOR
 Maintained by Mugunthan <https://github.com/mugunth13labs>.

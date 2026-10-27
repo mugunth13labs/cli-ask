@@ -214,19 +214,19 @@ func TestStripMarkdownFences(t *testing.T) {
 }
 
 func TestReadChatPromptMultiline(t *testing.T) {
-	// 1. Multiline buffer submitted with double Enter (blank line)
-	input1 := "line 1\nline 2\n\n"
+	// 1. Multiline buffer with blank lines preserved (Bug 2 fix)
+	input1 := "line 1\n\nline 2\n"
 	reader1 := bufio.NewReader(strings.NewReader(input1))
 	res1, err1 := readChatPrompt(reader1, false)
 	if err1 != nil {
 		t.Fatalf("unexpected error: %v", err1)
 	}
-	expected1 := "line 1\nline 2"
+	expected1 := "line 1\n\nline 2"
 	if res1 != expected1 {
 		t.Errorf("expected %q, got %q", expected1, res1)
 	}
 
-	// 2. Immediate command execution
+	// 2. Immediate command execution on first line
 	input2 := "exit\n"
 	reader2 := bufio.NewReader(strings.NewReader(input2))
 	res2, err2 := readChatPrompt(reader2, false)
@@ -246,6 +246,48 @@ func TestReadChatPromptMultiline(t *testing.T) {
 	}
 	if res3 != "single line" {
 		t.Errorf("expected 'single line', got %q", res3)
+	}
+}
+
+func TestMicroEditorOperations(t *testing.T) {
+	ed := NewMicroEditor("Test", "Subtitle")
+
+	// Insert text across multiple lines
+	ed.InsertText("hello\nworld")
+	if len(ed.Lines) != 2 || ed.Lines[0] != "hello" || ed.Lines[1] != "world" {
+		t.Fatalf("unexpected editor content: %v", ed.Lines)
+	}
+
+	// Cross-line backspace test:
+	// Move cursor to start of line 1 (col 0) and press backspace
+	ed.CursorRow = 1
+	ed.CursorCol = 0
+	ed.Backspace()
+
+	// Should merge into 1 line: "helloworld"
+	if len(ed.Lines) != 1 || ed.Lines[0] != "helloworld" {
+		t.Errorf("expected 'helloworld' after cross-line backspace, got %v", ed.Lines)
+	}
+	if ed.CursorCol != 5 {
+		t.Errorf("expected cursorCol at merge boundary 5, got %d", ed.CursorCol)
+	}
+
+	// Test processInput: Ctrl+Enter (byte 10)
+	submit, cancel := processInput(ed, []byte{10})
+	if !submit || cancel {
+		t.Errorf("expected submit on byte 10")
+	}
+
+	// Test processInput: Ctrl+D (byte 4)
+	submit, cancel = processInput(ed, []byte{4})
+	if !submit || cancel {
+		t.Errorf("expected submit on byte 4 (Ctrl+D)")
+	}
+
+	// Test processInput: Ctrl+C (byte 3)
+	submit, cancel = processInput(ed, []byte{3})
+	if submit || !cancel {
+		t.Errorf("expected cancel on byte 3 (Ctrl+C)")
 	}
 }
 

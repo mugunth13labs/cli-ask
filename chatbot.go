@@ -14,6 +14,7 @@ import (
 func isChatCommand(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" ||
+		lower == "/exit" || lower == "/quit" ||
 		lower == "/clear" || lower == "/c" ||
 		lower == "/help" || lower == "/?" ||
 		strings.HasPrefix(lower, "/model") {
@@ -71,17 +72,12 @@ func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error)
 			break
 		}
 
-		// Double Enter / blank line submission:
-		// If user has already entered text, and presses Enter on an empty line, submit!
-		if len(lines) > 0 && strings.TrimSpace(line) == "" {
-			break
-		}
-
-		// Ignore blank Enter on empty prompt
+		// Ignore blank Enter on initial prompt if nothing entered yet
 		if len(lines) == 0 && strings.TrimSpace(line) == "" {
 			continue
 		}
 
+		// Blank lines inside prompt are PRESERVED as newlines (Bug 2 fix: never submit on empty lines!)
 		lines = append(lines, line)
 	}
 
@@ -98,6 +94,23 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		}
 	}
 
+	// Enter Alternate Screen Buffer in interactive terminals
+	if opts.IsStdoutTerminal {
+		_, _ = os.Stdout.WriteString(ansiEnterAltScreen + ansiEnablePaste)
+		_ = os.Stdout.Sync()
+	}
+
+	var restoreOnce sync.Once
+	restoreScreen := func() {
+		restoreOnce.Do(func() {
+			if opts.IsStdoutTerminal {
+				_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen)
+				_ = os.Stdout.Sync()
+			}
+		})
+	}
+	defer restoreScreen()
+
 	if opts.IsStdoutTerminal {
 		fmt.Printf("ask v%s — Continuous Chat Mode\n", version)
 		fmt.Printf("Model: %s | Session: %s\n", cfg.Model, sessionID)
@@ -106,7 +119,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		} else if opts.AppendFile != "" {
 			fmt.Printf("Appending chat to: %s\n", opts.AppendFile)
 		}
-		fmt.Println("Type message (Enter for newline, Ctrl+Enter or blank Enter to send). Commands: /clear, /model, exit")
+		fmt.Println("Send: Ctrl+Enter (or Ctrl+D) | Newline: Enter | Exit: exit, /q, /exit | Cancel: Ctrl+C")
 		fmt.Println()
 	}
 
@@ -126,9 +139,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 				activeCancel = nil
 				fmt.Print("\n[Cancelled]\n")
 			} else {
-				if opts.IsStdoutTerminal {
-					fmt.Print("\nGoodbye!\n")
-				}
+				restoreScreen()
 				os.Exit(0)
 			}
 			mu.Unlock()
@@ -203,9 +214,6 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		input, readErr := readChatPrompt(reader, opts.IsStdoutTerminal)
 		if readErr != nil {
 			if readErr == io.EOF {
-				if opts.IsStdoutTerminal {
-					fmt.Println()
-				}
 				break
 			}
 			return readErr
@@ -217,10 +225,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 
 		// Check REPL commands
 		lower := strings.ToLower(input)
-		if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" {
-			if opts.IsStdoutTerminal {
-				fmt.Println("Goodbye!")
-			}
+		if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" || lower == "/exit" || lower == "/quit" {
 			break
 		}
 
