@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 )
@@ -53,6 +54,40 @@ func TestParseCLIArgsChatbotWithPrompt(t *testing.T) {
 	}
 }
 
+func TestParseCLIArgsFileOutput(t *testing.T) {
+	p1 := parseCLIArgs([]string{"-o", "out.txt", "explain", "kubernetes"})
+	if p1.OutputFile != "out.txt" {
+		t.Errorf("expected OutputFile 'out.txt', got %q", p1.OutputFile)
+	}
+	if p1.Prompt != "explain kubernetes" {
+		t.Errorf("expected prompt 'explain kubernetes', got %q", p1.Prompt)
+	}
+
+	p2 := parseCLIArgs([]string{"--output", "file.log", "hello"})
+	if p2.OutputFile != "file.log" {
+		t.Errorf("expected OutputFile 'file.log', got %q", p2.OutputFile)
+	}
+	if p2.Prompt != "hello" {
+		t.Errorf("expected prompt 'hello', got %q", p2.Prompt)
+	}
+
+	p3 := parseCLIArgs([]string{"-a", "notes.md", "more", "context"})
+	if p3.AppendFile != "notes.md" {
+		t.Errorf("expected AppendFile 'notes.md', got %q", p3.AppendFile)
+	}
+	if p3.Prompt != "more context" {
+		t.Errorf("expected prompt 'more context', got %q", p3.Prompt)
+	}
+
+	p4 := parseCLIArgs([]string{"-i", "-o", "session.txt"})
+	if p4.Action != "chatbot" {
+		t.Errorf("expected action 'chatbot', got %q", p4.Action)
+	}
+	if p4.OutputFile != "session.txt" {
+		t.Errorf("expected OutputFile 'session.txt', got %q", p4.OutputFile)
+	}
+}
+
 func TestParseCLIArgsDisambiguation(t *testing.T) {
 	// If extra args exist, --config or --help should NOT trigger action, but be treated as prompt
 	p := parseCLIArgs([]string{"--config", "ps", "--help"})
@@ -79,15 +114,27 @@ func TestParseCLIArgsDisambiguation(t *testing.T) {
 	if p3.Prompt != "ps -ef --sort -p" {
 		t.Errorf("expected prompt 'ps -ef --sort -p', got %q", p3.Prompt)
 	}
+
+	// gcc -o main main.c must NOT be parsed as ask -o output file!
+	p4 := parseCLIArgs([]string{"gcc", "-o", "main", "main.c"})
+	if p4.OutputFile != "" {
+		t.Errorf("expected OutputFile to be empty for gcc command, got %q", p4.OutputFile)
+	}
+	if p4.Prompt != "gcc -o main main.c" {
+		t.Errorf("expected prompt 'gcc -o main main.c', got %q", p4.Prompt)
+	}
 }
 
 func TestParseCLIArgsEscapeSeparator(t *testing.T) {
-	p := parseCLIArgs([]string{"--", "--clear", "-c", "--config", "-i"})
+	p := parseCLIArgs([]string{"--", "--clear", "-c", "--config", "-i", "-o", "file.txt"})
 	if p.Action != "query" {
 		t.Errorf("expected action 'query', got %q", p.Action)
 	}
-	if p.Prompt != "--clear -c --config -i" {
-		t.Errorf("expected prompt '--clear -c --config -i', got %q", p.Prompt)
+	if p.OutputFile != "" {
+		t.Errorf("expected OutputFile empty when after --, got %q", p.OutputFile)
+	}
+	if p.Prompt != "--clear -c --config -i -o file.txt" {
+		t.Errorf("expected prompt '--clear -c --config -i -o file.txt', got %q", p.Prompt)
 	}
 }
 
@@ -98,6 +145,42 @@ func TestParseCLIArgsNoContext(t *testing.T) {
 	}
 	if p.Prompt != "explain this" {
 		t.Errorf("expected prompt 'explain this', got %q", p.Prompt)
+	}
+}
+
+func TestReadChatPromptMultiline(t *testing.T) {
+	// 1. Multiline buffer submitted with double Enter (blank line)
+	input1 := "line 1\nline 2\n\n"
+	reader1 := bufio.NewReader(strings.NewReader(input1))
+	res1, err1 := readChatPrompt(reader1, false)
+	if err1 != nil {
+		t.Fatalf("unexpected error: %v", err1)
+	}
+	expected1 := "line 1\nline 2"
+	if res1 != expected1 {
+		t.Errorf("expected %q, got %q", expected1, res1)
+	}
+
+	// 2. Immediate command execution
+	input2 := "exit\n"
+	reader2 := bufio.NewReader(strings.NewReader(input2))
+	res2, err2 := readChatPrompt(reader2, false)
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
+	if res2 != "exit" {
+		t.Errorf("expected 'exit', got %q", res2)
+	}
+
+	// 3. Ctrl+Enter escape sequence submit
+	input3 := "single line\x1b[13;5u\n"
+	reader3 := bufio.NewReader(strings.NewReader(input3))
+	res3, err3 := readChatPrompt(reader3, false)
+	if err3 != nil {
+		t.Fatalf("unexpected error: %v", err3)
+	}
+	if res3 != "single line" {
+		t.Errorf("expected 'single line', got %q", res3)
 	}
 }
 

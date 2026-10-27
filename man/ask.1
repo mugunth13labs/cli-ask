@@ -1,12 +1,18 @@
-.TH ASK 1 "October 2026" "cli-ask 0.3.2" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.3" "User Commands"
 .SH NAME
-ask \- non-intrusive terminal AI assistant with session-scoped context and chatbot mode
+ask \- non-intrusive terminal AI assistant with session-scoped context, chatbot mode, and direct file output
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
 .br
 .B ask
 \fB--chatbot\fR | \fB-i\fR [\fIPROMPT\fR]
+.br
+.B ask
+\fB-o\fR | \fB--output\fR \fIFILE\fR [\fIPROMPT\fR]
+.br
+.B ask
+\fB-a\fR | \fB--append\fR \fIFILE\fR [\fIPROMPT\fR]
 .br
 .B ask
 [\fI--no-context\fR]
@@ -26,13 +32,19 @@ Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: 
 .PP
 When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous REPL session, allowing natural conversational back-and-forth prompting within the terminal without exiting after each turn.
 .PP
-When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode, accepting literal text, code snippets, or command chains until terminated by standard OS EOF (\fBCtrl+D\fR on Linux/macOS, \fBCtrl+Z\fR then Enter on Windows).
+When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode. Pressing \fBEnter\fR inserts a newline, allowing multiline scripts and prompts to be typed or pasted freely. The prompt is submitted upon pressing \fBCtrl+Enter\fR, entering a blank line (double \fBEnter\fR), or pressing \fBCtrl+D\fR.
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
 .PP
-When outputting to an interactive terminal, a subtle horizontal splitter line separates user queries from AI responses. On non-terminal stdout or redirection pipelines, status indicators and dividers are automatically suppressed to preserve clean data streaming.
+When outputting to an interactive terminal, a subtle horizontal splitter line separates user queries from AI responses. On non-terminal stdout or redirection pipelines, status indicators and dividers are automatically suppressed to preserve clean data streaming, while live progress is intelligently displayed on standard error.
 
 .SH OPTIONS
+.TP
+.BR \-o ", " \-\-output " " \fIFILE\fR
+Write the AI response directly to \fIFILE\fR (overwrites existing contents).
+.TP
+.BR \-a ", " \-\-append " " \fIFILE\fR
+Append the AI response directly to \fIFILE\fR (creates file if it does not exist).
 .TP
 .BR \-i ", " \-\-chatbot " [" \fIPROMPT\fR "]"
 Start a continuous interactive chat session (REPL). If an initial prompt is provided, it is submitted upon launch.
@@ -97,11 +109,14 @@ Session-scoped conversation history for the active terminal shell.
 .B Quick command lookup:
 ask "how to find listening ports in linux"
 .TP
+.B Save response directly to file:
+ask -o ports.txt "how to find listening ports in linux"
+.TP
+.B Append response to notes:
+ask -a notes.md "give an example of grep -E"
+.TP
 .B Continuous chatbot session:
 ask -i
-.TP
-.B Chatbot with initial question:
-ask -i "explain how systemd cgroups work"
 .TP
 .B Passing literal command arguments:
 ask ps -eo pid,cmd --sort
@@ -109,17 +124,11 @@ ask ps -eo pid,cmd --sort
 .B Interactive multiline entry:
 ask
 .TP
-.B Follow-up in same terminal:
-ask "filter only tcp ones"
-.TP
-.B Self-updating to latest version:
-ask --update-self
-.TP
 .B Standard input piping:
 git diff | ask "summarize these changes"
 .TP
-.B Clear active session:
-ask --clear
+.B Standard shell redirection:
+ask "summarize docker cgroups" >> notes.txt
 
 .SH AUTHOR
 Maintained by Mugunthan <https://github.com/mugunth13labs>.

@@ -41,6 +41,13 @@ type StreamResponse struct {
 	} `json:"error,omitempty"`
 }
 
+type QueryOptions struct {
+	OutputFile       string
+	AppendFile       string
+	IsStdoutTerminal bool
+	IsStderrTerminal bool
+}
+
 func formatSplitter(model string) string {
 	prefix := fmt.Sprintf("─── ask [%s] ", model)
 	totalWidth := 60
@@ -66,7 +73,7 @@ func isCharDevice(f *os.File) bool {
 	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
-func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStdoutTerminal bool, isStderrTerminal bool) (string, error) {
+func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts QueryOptions) (string, error) {
 	reqBody := ChatRequest{
 		Model:    cfg.Model,
 		Messages: messages,
@@ -88,14 +95,45 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 	req.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
 	req.Header.Set("X-Title", "ask-cli")
 
-	if isStderrTerminal {
+	if opts.IsStderrTerminal {
 		fmt.Fprintf(os.Stderr, "[%s thinking...]", cfg.Model)
+	}
+
+	// Prepare file target if specified
+	var targetFile *os.File
+	var targetPath string
+	var fileActionDesc string
+
+	if opts.OutputFile != "" {
+		targetPath = opts.OutputFile
+		fileActionDesc = "saved"
+		f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			if opts.IsStderrTerminal {
+				fmt.Fprint(os.Stderr, "\r\033[K")
+			}
+			return "", fmt.Errorf("failed to open output file: %w", err)
+		}
+		defer f.Close()
+		targetFile = f
+	} else if opts.AppendFile != "" {
+		targetPath = opts.AppendFile
+		fileActionDesc = "appended"
+		f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			if opts.IsStderrTerminal {
+				fmt.Fprint(os.Stderr, "\r\033[K")
+			}
+			return "", fmt.Errorf("failed to open append file: %w", err)
+		}
+		defer f.Close()
+		targetFile = f
 	}
 
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		if isStderrTerminal {
+		if opts.IsStderrTerminal {
 			fmt.Fprint(os.Stderr, "\r\033[K")
 		}
 		if ctx.Err() != nil {
@@ -106,7 +144,7 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if isStderrTerminal {
+		if opts.IsStderrTerminal {
 			fmt.Fprint(os.Stderr, "\r\033[K")
 		}
 		body, _ := io.ReadAll(resp.Body)
@@ -135,7 +173,7 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 			}
 
 			if streamResp.Error != nil {
-				if isStderrTerminal && !clearedStatus {
+				if opts.IsStderrTerminal && !clearedStatus {
 					fmt.Fprint(os.Stderr, "\r\033[K")
 					clearedStatus = true
 				}
@@ -145,15 +183,30 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 			if len(streamResp.Choices) > 0 {
 				chunk := streamResp.Choices[0].Delta.Content
 				if chunk != "" {
-					if isStderrTerminal && !clearedStatus {
-						// Erase the thinking indicator line before streaming content starts
-						fmt.Fprint(os.Stderr, "\r\033[K")
+					if opts.IsStderrTerminal && !clearedStatus {
+						if targetFile != nil {
+							fmt.Fprintf(os.Stderr, "\r\033[K[%s saving to %s...]\n", cfg.Model, targetPath)
+						} else if opts.IsStdoutTerminal {
+							// Interactive terminal: clear status line so AI response begins cleanly
+							fmt.Fprint(os.Stderr, "\r\033[K")
+						} else {
+							// Redirection / piping: keep user informed on stderr so screen is never blank
+							fmt.Fprintf(os.Stderr, "\r\033[K[%s streaming to output...]\n", cfg.Model)
+						}
 						clearedStatus = true
 					}
-					if !hasOutput {
-						printSplitter(cfg.Model, isStdoutTerminal)
+
+					if targetFile != nil {
+						// Write chunk directly to file
+						_, _ = targetFile.WriteString(chunk)
+					} else {
+						// Print chunk to stdout
+						if !hasOutput {
+							printSplitter(cfg.Model, opts.IsStdoutTerminal)
+						}
+						fmt.Print(chunk)
 					}
-					fmt.Print(chunk)
+
 					fullResponseBuilder.WriteString(chunk)
 					hasOutput = true
 				}
@@ -161,7 +214,7 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 		}
 	}
 
-	if isStderrTerminal && !clearedStatus {
+	if opts.IsStderrTerminal && !clearedStatus {
 		fmt.Fprint(os.Stderr, "\r\033[K")
 	}
 
@@ -170,7 +223,19 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, isStd
 	}
 
 	if hasOutput {
-		fmt.Println()
+		if targetFile != nil {
+			_, _ = targetFile.WriteString("\n")
+			_ = targetFile.Sync()
+			if opts.IsStderrTerminal {
+				fmt.Fprintf(os.Stderr, "[%s to %s]\n", fileActionDesc, targetPath)
+			}
+		} else {
+			fmt.Println()
+			_ = os.Stdout.Sync()
+			if !opts.IsStdoutTerminal && opts.IsStderrTerminal {
+				fmt.Fprintf(os.Stderr, "[done]\n")
+			}
+		}
 	}
 
 	return fullResponseBuilder.String(), nil

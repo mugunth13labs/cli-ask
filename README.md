@@ -28,6 +28,7 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 - **Session-Scoped by Design**: Memory is strictly scoped to the parent shell process (PPID). Two terminal tabs or tmux panes on the same machine never contaminate each other's context. Your Kubernetes debugging in Tab 1 never bleeds into your Terraform work in Tab 2.
 - **Auto-Compacting, Not Discarding**: Rather than dropping context abruptly with an arbitrary timer, long multi-turn sessions automatically roll into concise summaries behind the scenes. Zero latency overhead, zero token window blowouts.
 - **Terminal-Native Plain Text**: Outputs clean, readable plain text with ASCII underlines and clean indentation—no unrendered web markdown fences or raw hash symbols cluttering your terminal.
+- **Direct File Integration**: Write or append AI responses directly to files with `-o` or `-a` with live terminal progress.
 - **Zero Baggage**: Written in pure Go with zero external dependencies. Under 10ms startup, no Python virtual environments, no node_modules, no compiler needed to run.
 
 ---
@@ -36,12 +37,13 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 
 - ⚡ **Instant Execution**: Native standalone binary. Starts immediately with near-zero latency.
 - 💬 **Continuous Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction with in-session model switching.
+- 📁 **Direct File Output**: Save responses directly using `ask -o <file>` (overwrite) or `ask -a <file>` (append).
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
-- 🌊 **Token Streaming**: Real-time token streaming straight to stdout.
-- 💡 **Visual Feedback & Splitters**: Shows `[<model> thinking...]` and a subtle divider line (`─── ask [model] ──────────`) in interactive terminals; automatically suppressed on pipes and redirections.
+- 🌊 **Token Streaming**: Real-time token streaming straight to stdout or files.
+- 💡 **Smart Progress & Splitters**: Shows live progress on stderr during file redirection (`[streaming to output...] -> [done]`); interactive sessions display a subtle divider line (`─── ask [model] ──────────`).
 - 🔄 **Seamless Updates**: Built-in self-updater (`ask --update-self`) to stay on the latest version across all platforms.
 - 🧠 **Context Awareness**: Natural follow-ups within the same terminal session (`ask "now filter by status running"`).
-- 📝 **Interactive Multiline Buffer**: Type `ask` alone to paste multiline logs, scripts, or pipelines byte-for-byte until OS EOF (`Ctrl+D` / `Ctrl+Z`).
+- 📝 **Standardized Multiline Input**: `Enter` inserts a newline; submit anytime with `Ctrl+Enter`, an empty line, or `Ctrl+D`.
 - 🔌 **Standard Unix Piping**: Feed command outputs or diffs directly (`git diff | ask "summarize changes"`).
 - 🧹 **Zero Configuration Friction**: Auto-prompts for your OpenRouter key on first run and saves locally to `~/.config/ask/config.json`.
 
@@ -98,9 +100,9 @@ ask what does the -F flag do in awk
 When you want an uninterrupted back-and-forth dialogue without exiting to the shell between each turn:
 ```bash
 $ ask -i
-ask v0.3.2 — Continuous Chat Mode
+ask v0.3.3 — Continuous Chat Mode
 Model: nvidia/nemotron-3.5-lightning:free | Session: session-12345
-Type your message below. Commands: /clear, /model <name>, /help, exit
+Type message (Enter for newline, Ctrl+Enter or blank Enter to send). Commands: /clear, /model, exit
 
 >>> how do I inspect docker container network interfaces?
 ─── ask [nvidia/nemotron-3.5-lightning:free] ───────────────────────────
@@ -118,65 +120,72 @@ Run:
 Goodbye!
 ```
 
-You can also pass an initial prompt:
+You can also pass an initial prompt or pipe chat logs into a file:
 ```bash
 ask -i "start debugging this nginx error"
+ask -i -o session_notes.txt
 ```
 
-Inside chatbot mode, the following commands are available:
+Inside chatbot mode:
+- `Enter`: Inserts a newline so you can type paragraphs and code freely.
+- `Ctrl+Enter` or blank `Enter`: Submits your prompt to the AI.
 - `/clear` or `/c`: Reset conversation history for the session.
 - `/model <name>`: Switch active model on the fly.
 - `/help`: Display in-chat help.
 - `exit`, `quit`, or `Ctrl+C`: Exit chatbot mode.
 
-### 3. Literal Command Flags (Preserving Option Flags)
+### 3. Direct File Output (`-o`, `-a`)
+Save answers directly to files without worrying about shell pipe syntax:
+```bash
+# Overwrite or create file
+ask -o docker_setup.md "create a compose file for postgres and redis"
+
+# Append to an existing notes file
+ask -a docker_setup.md "now add healthchecks for both services"
+```
+The terminal displays live progress (`[saving to docker_setup.md...]` -> `[saved to docker_setup.md]`), keeping the output clean and uncorrupted.
+
+### 4. Interactive Multiline Entry
+Simply run `ask` with no prompt arguments to paste or type multiline scripts, configs, or queries:
+```bash
+$ ask
+Type or paste prompt (press Ctrl+Enter or blank line to submit, Ctrl+C to cancel):
+ps -eo pid,ppid,stat,cmd | awk 'NR==1 || $3=="Z" || $3=="D"' | sort -r -k3,3
+explain what this pipeline does
+
+# Press Enter on a blank line (or Ctrl+Enter) to submit
+```
+
+### 5. Literal Command Flags (Preserving Option Flags)
 `ask` recognizes that commands often contain their own flags. Unrecognized flags are preserved as prompt text:
 ```bash
 ask ps -eo pid,cmd --sort
 ask tar -czvf archive.tar.gz
+ask gcc -o main main.c
 ```
 
-### 4. Edge Case: Shell Operators (`|`, `>`, `&`, `;`)
-> [!IMPORTANT]
-> **Why `ask ps aux | grep root` doesn't work as a single query**:
-> In all operating systems (Bash, Zsh, PowerShell), the shell intercepts pipe (`|`) and redirection (`>`, `&`, `;`) operators **before** passing arguments to any program.
->
-> If you run:
-> ```bash
-> ask ps aux | grep root   # ❌ The shell runs ask, then pipes ask's output into grep!
-> ```
->
-> **The Two Proper Ways to Query Complex Command Chains:**
->
-> **Method A: Wrap in single quotes**:
-> ```bash
-> ask 'ps -eo pid,ppid,stat,cmd | awk "NR==1 || \$3==\"Z\"" | sort -r'
-> ```
->
-> **Method B: Interactive Multiline Mode (Recommended for long snippets)**:
-> Simply run `ask` with no arguments, paste the entire pipeline verbatim, and press `Ctrl+D` (`Ctrl+Z` then `Enter` on Windows):
-> ```bash
-> $ ask
-> Type or paste prompt (press Ctrl+D to submit, Ctrl+C to cancel):
-> ps -eo pid,ppid,stat,cmd | awk 'NR==1 || $3=="Z" || $3=="D"' | sort -r -k3,3 | nl -v 0
-> explain what this does
-> [Ctrl+D]
-> ```
-> Inside multiline mode, the shell never intercepts or interprets any characters.
+### 6. Standard Redirection & Stderr Progress
+When redirecting standard output to a file or downstream command, `ask` keeps you informed on `stderr` so your terminal never looks frozen:
+```bash
+$ ask "summarize kubernetes cgroups" >> notes.txt
+[nvidia/nemotron-3.5-lightning:free thinking...]
+[nvidia/nemotron-3.5-lightning:free streaming to output...]
+[done]
+```
+The redirected file receives pure, clean plain text without any escape sequences or status lines.
 
-### 5. Edge Case: Flag Disambiguation & The `--` Separator
-What if you want to ask a question about an `ask` flag itself, like asking *"what does --config do?"*
-
+### 7. Flag Disambiguation & The `--` Separator
 - **Standalone Tool Actions**: Flags like `--config`, `--help`, `--version`, `--clear`, and `--update-self` only trigger tool actions when entered **alone** (`ask --config`).
 - **If Extra Arguments Are Present**: If you type `ask --config ps --help`, `ask` treats it as a **question** for the AI, rather than dumping your settings.
 - **The Absolute Escape Hatch (`--`)**: If you want to guarantee that zero tokens are interpreted as `ask` options, use standard POSIX `--`:
   ```bash
   ask -- --clear
   ask -- --config
+  ask -- -o file.txt
   ```
   Everything following `--` is treated strictly as literal prompt text.
 
-### 6. Conversational Follow-ups (Scoped to Active Shell)
+### 8. Conversational Follow-ups (Scoped to Active Shell)
 Context is remembered within the **same terminal tab**:
 ```bash
 $ ask "how to check listening ports with ss?"
@@ -186,7 +195,7 @@ $ ask "filter only tcp sockets"
 ss -tulpn | grep tcp
 ```
 
-### 7. Standard Input Piping
+### 9. Standard Input Piping
 Feed file outputs, diffs, or logs directly into `ask`:
 ```bash
 # Debug system logs
@@ -199,7 +208,7 @@ git diff | ask "review this diff for potential performance regressions"
 netstat -tulpn | ask "which ports are exposed publicly?"
 ```
 
-### 8. Session Controls
+### 10. Session Controls
 ```bash
 # Clear conversation history for the current terminal window
 ask --clear   # or ask -c
@@ -208,7 +217,7 @@ ask --clear   # or ask -c
 ask --no-context "what is the default ssh port?"
 ```
 
-### 9. Switching Models
+### 11. Switching Models
 By default, `ask` uses top-performing free models like `nvidia/nemotron-3.5-lightning:free`. You can switch to any free or paid model on OpenRouter:
 ```bash
 # Check current config & active session

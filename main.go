@@ -1,22 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 )
 
 const (
-	version = "0.3.2"
+	version = "0.3.3"
 )
 
 type ParsedArgs struct {
 	Action     string // "help", "version", "config", "clear", "set-key", "set-model", "update-self", "chatbot", "query"
 	ActionArg  string // value for --set-key or --set-model
+	OutputFile string // path for -o / --output
+	AppendFile string // path for -a / --append
 	Prompt     string // collected prompt tokens
 	UseContext bool   // true unless --no-context is provided
 }
@@ -71,18 +73,12 @@ func parseCLIArgs(args []string) ParsedArgs {
 		return result
 	}
 
-	// 3. Check for leading chatbot mode flag: ask -i <prompt> or ask --chatbot <prompt>
-	startIndex := 0
-	if args[0] == "-i" || args[0] == "--chatbot" {
-		result.Action = "chatbot"
-		startIndex = 1
-	}
-
-	// 4. Process prompt tokens, handling `--` separator & `--no-context`
+	// 3. Process leading options and prompt tokens
 	var promptTokens []string
 	literalMode := false
+	flagsAllowed := true
 
-	for i := startIndex; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
 		if literalMode {
@@ -92,12 +88,36 @@ func parseCLIArgs(args []string) ParsedArgs {
 
 		if arg == "--" {
 			literalMode = true
+			flagsAllowed = false
 			continue
 		}
 
-		if arg == "--no-context" {
-			result.UseContext = false
-			continue
+		if flagsAllowed {
+			if arg == "-i" || arg == "--chatbot" {
+				result.Action = "chatbot"
+				continue
+			}
+			if arg == "--no-context" {
+				result.UseContext = false
+				continue
+			}
+			if arg == "-o" || arg == "--output" {
+				if i+1 < len(args) {
+					result.OutputFile = args[i+1]
+					i++
+				}
+				continue
+			}
+			if arg == "-a" || arg == "--append" {
+				if i+1 < len(args) {
+					result.AppendFile = args[i+1]
+					i++
+				}
+				continue
+			}
+
+			// First non-option argument encountered: subsequent flags belong to the user's prompt
+			flagsAllowed = false
 		}
 
 		promptTokens = append(promptTokens, arg)
@@ -108,19 +128,49 @@ func parseCLIArgs(args []string) ParsedArgs {
 }
 
 func readInteractivePrompt() (string, error) {
-	eofHint := "Ctrl+D"
-	if runtime.GOOS == "windows" {
-		eofHint = "Ctrl+Z then Enter"
+	fmt.Fprintln(os.Stderr, "Type or paste prompt (press Ctrl+Enter or blank line to submit, Ctrl+C to cancel):")
+
+	reader := bufio.NewReader(os.Stdin)
+	var lines []string
+
+	for {
+		rawLine, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				if len(lines) > 0 {
+					break
+				}
+				return "", err
+			}
+			return "", err
+		}
+
+		line := strings.TrimRight(rawLine, "\r\n")
+
+		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
+		if hasCtrlEnter {
+			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
+			if strings.TrimSpace(line) != "" {
+				lines = append(lines, line)
+			}
+			break
+		}
+
+		// Blank line after content submits
+		if len(lines) > 0 && strings.TrimSpace(line) == "" {
+			break
+		}
+
+		// Initial empty lines ignored
+		if len(lines) == 0 && strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		lines = append(lines, line)
 	}
 
-	fmt.Fprintf(os.Stderr, "Type or paste prompt (press %s to submit, Ctrl+C to cancel):\n", eofHint)
-
-	bytesRead, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(bytesRead)), nil
+	return strings.TrimSpace(strings.Join(lines, "\n")), nil
 }
 
 func readPipedStdinWithTimeout(maxWait time.Duration) string {
@@ -147,20 +197,19 @@ func readPipedStdinWithTimeout(maxWait time.Duration) string {
 }
 
 func printHelp() {
-	eofHint := "Ctrl+D"
-	if runtime.GOOS == "windows" {
-		eofHint = "Ctrl+Z then Enter"
-	}
-
 	fmt.Printf(`ask v%s — Lightning-fast terminal AI query tool with session context
 
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
-  ask                           Interactive multiline entry (ends with %s)
+  ask                           Interactive multiline entry (Ctrl+Enter or blank line to submit)
   ask --chatbot, -i             Start continuous interactive chat session
   echo "code" | ask "explain"   Pipe stdin to ask
   ask -- <prompt>               Treat everything after -- as literal prompt
+
+File Output:
+  ask -o, --output <file>       Write AI response directly to file (overwrites)
+  ask -a, --append <file>       Append AI response directly to file
 
 Chatbot Mode:
   ask --chatbot, -i             Continuous multi-turn chat session with REPL
@@ -180,7 +229,7 @@ Configuration:
 
 Environment:
   OPENROUTER_API_KEY            Overrides configured API key
-`, version, eofHint, defaultModel)
+`, version, defaultModel)
 }
 
 func main() {
@@ -254,6 +303,13 @@ func main() {
 	isStdoutTerminal := isCharDevice(os.Stdout)
 	isStderrTerminal := isCharDevice(os.Stderr)
 
+	queryOpts := QueryOptions{
+		OutputFile:       parsed.OutputFile,
+		AppendFile:       parsed.AppendFile,
+		IsStdoutTerminal: isStdoutTerminal,
+		IsStderrTerminal: isStderrTerminal,
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
@@ -276,7 +332,7 @@ func main() {
 	}
 
 	if parsed.Action == "chatbot" {
-		if err := runChatbot(cfg, parsed.Prompt, isStdoutTerminal, isStderrTerminal); err != nil {
+		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
 			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
 			os.Exit(1)
 		}
@@ -288,7 +344,7 @@ func main() {
 	// If no prompt in args:
 	if strings.TrimSpace(userPrompt) == "" {
 		if isStdinTerminal {
-			// Interactive multiline entry terminated by OS EOF
+			// Interactive multiline entry
 			prompt, err := readInteractivePrompt()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
@@ -332,7 +388,7 @@ func main() {
 	apiMessages = append(apiMessages, Message{Role: "user", Content: userPrompt})
 
 	ctx := context.Background()
-	response, queryErr := queryOpenRouter(ctx, cfg, apiMessages, isStdoutTerminal, isStderrTerminal)
+	response, queryErr := queryOpenRouter(ctx, cfg, apiMessages, queryOpts)
 	if queryErr != nil {
 		fmt.Fprintf(os.Stderr, "\nQuery error: %v\n", queryErr)
 		os.Exit(1)

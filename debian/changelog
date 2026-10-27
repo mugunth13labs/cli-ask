@@ -1,3 +1,13 @@
+cli-ask (0.3.3-1) unstable; urgency=medium
+
+  * Standardize multiline prompt entry across interactive and chatbot modes.
+  * Allow Enter to insert newlines; Ctrl+Enter, double-Enter, or Ctrl+D to submit.
+  * Add built-in file writing and appending flags (-o/--output, -a/--append).
+  * Improve live progress reporting on stderr when stdout is redirected to files/pipes.
+  * Ensure immediate output flushing for pipeline integration.
+
+ -- Mugunthan <mugunth13@proton.me>  Tue, 27 Oct 2026 12:30:00 +0800
+
 cli-ask (0.3.2-1) unstable; urgency=medium
 
   * Add continuous interactive chatbot mode (ask --chatbot, ask -i) with REPL.

@@ -11,20 +11,102 @@ import (
 	"sync"
 )
 
-func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStderrTerminal bool) error {
+func isChatCommand(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" ||
+		lower == "/clear" || lower == "/c" ||
+		lower == "/help" || lower == "/?" ||
+		strings.HasPrefix(lower, "/model") {
+		return true
+	}
+	return false
+}
+
+func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error) {
+	var lines []string
+
+	for {
+		if isStdoutTerminal {
+			if len(lines) == 0 {
+				fmt.Print(">>> ")
+			} else {
+				fmt.Print("... ")
+			}
+		}
+
+		rawLine, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				if len(lines) > 0 {
+					break
+				}
+				return "", io.EOF
+			}
+			return "", err
+		}
+
+		// Strip trailing CR and LF
+		line := strings.TrimRight(rawLine, "\r\n")
+
+		// Detect terminal escape sequences for Ctrl+Enter (CSI u and xterm formats)
+		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
+		if hasCtrlEnter {
+			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
+		}
+
+		// If first line and it's an immediate command (exit, /clear, /model, /help), submit immediately
+		if len(lines) == 0 {
+			trimmed := strings.TrimSpace(line)
+			if isChatCommand(trimmed) {
+				return trimmed, nil
+			}
+		}
+
+		// If Ctrl+Enter was detected, submit immediately
+		if hasCtrlEnter {
+			if strings.TrimSpace(line) != "" {
+				lines = append(lines, line)
+			}
+			break
+		}
+
+		// Double Enter / blank line submission:
+		// If user has already entered text, and presses Enter on an empty line, submit!
+		if len(lines) > 0 && strings.TrimSpace(line) == "" {
+			break
+		}
+
+		// Ignore blank Enter on empty prompt
+		if len(lines) == 0 && strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		lines = append(lines, line)
+	}
+
+	return strings.TrimSpace(strings.Join(lines, "\n")), nil
+}
+
+func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 	sessionID := getSessionID()
 	session, err := loadSession(sessionID)
 	if err != nil {
 		session = &Session{
-			ID:        sessionID,
-			Messages:  []Message{},
+			ID:       sessionID,
+			Messages: []Message{},
 		}
 	}
 
-	if isStdoutTerminal {
+	if opts.IsStdoutTerminal {
 		fmt.Printf("ask v%s — Continuous Chat Mode\n", version)
 		fmt.Printf("Model: %s | Session: %s\n", cfg.Model, sessionID)
-		fmt.Println("Type your message below. Commands: /clear, /model <name>, /help, exit")
+		if opts.OutputFile != "" {
+			fmt.Printf("Saving chat to: %s\n", opts.OutputFile)
+		} else if opts.AppendFile != "" {
+			fmt.Printf("Appending chat to: %s\n", opts.AppendFile)
+		}
+		fmt.Println("Type message (Enter for newline, Ctrl+Enter or blank Enter to send). Commands: /clear, /model, exit")
 		fmt.Println()
 	}
 
@@ -44,7 +126,7 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 				activeCancel = nil
 				fmt.Print("\n[Cancelled]\n")
 			} else {
-				if isStdoutTerminal {
+				if opts.IsStdoutTerminal {
 					fmt.Print("\nGoodbye!\n")
 				}
 				os.Exit(0)
@@ -54,6 +136,13 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 	}()
 
 	reader := bufio.NewReader(os.Stdin)
+
+	// In chatbot mode, if writing to file, subsequent turns should append
+	chatQueryOpts := opts
+	if chatQueryOpts.OutputFile != "" {
+		chatQueryOpts.AppendFile = chatQueryOpts.OutputFile
+		chatQueryOpts.OutputFile = ""
+	}
 
 	executeQuery := func(prompt string) {
 		prompt = strings.TrimSpace(prompt)
@@ -74,7 +163,7 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 		activeCancel = cancel
 		mu.Unlock()
 
-		response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, isStdoutTerminal, isStderrTerminal)
+		response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, chatQueryOpts)
 
 		mu.Lock()
 		activeCancel = nil
@@ -91,7 +180,7 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 				Message{Role: "assistant", Content: response},
 			)
 			_ = saveSession(session)
-			if isStdoutTerminal {
+			if opts.IsStdoutTerminal {
 				fmt.Println()
 			}
 		}
@@ -99,21 +188,17 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 
 	// If initial prompt was supplied, run it first
 	if strings.TrimSpace(initialPrompt) != "" {
-		if isStdoutTerminal {
+		if opts.IsStdoutTerminal {
 			fmt.Printf(">>> %s\n", initialPrompt)
 		}
 		executeQuery(initialPrompt)
 	}
 
 	for {
-		if isStdoutTerminal {
-			fmt.Print(">>> ")
-		}
-
-		line, readErr := reader.ReadString('\n')
+		input, readErr := readChatPrompt(reader, opts.IsStdoutTerminal)
 		if readErr != nil {
 			if readErr == io.EOF {
-				if isStdoutTerminal {
+				if opts.IsStdoutTerminal {
 					fmt.Println()
 				}
 				break
@@ -121,15 +206,14 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 			return readErr
 		}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
+		if input == "" {
 			continue
 		}
 
 		// Check REPL commands
-		lower := strings.ToLower(line)
+		lower := strings.ToLower(input)
 		if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" {
-			if isStdoutTerminal {
+			if opts.IsStdoutTerminal {
 				fmt.Println("Goodbye!")
 			}
 			break
@@ -146,7 +230,7 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 		}
 
 		if strings.HasPrefix(lower, "/model") {
-			parts := strings.Fields(line)
+			parts := strings.Fields(input)
 			if len(parts) > 1 {
 				cfg.Model = parts[1]
 				fmt.Printf("Switched model to: %s\n\n", cfg.Model)
@@ -166,7 +250,7 @@ func runChatbot(cfg *Config, initialPrompt string, isStdoutTerminal bool, isStde
 			continue
 		}
 
-		executeQuery(line)
+		executeQuery(input)
 	}
 
 	return nil
