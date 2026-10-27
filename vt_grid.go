@@ -149,6 +149,12 @@ func (g *VTGrid) SnapToBottom() {
 	g.HasSelection = false
 }
 
+func (g *VTGrid) ClearSelection() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.HasSelection = false
+}
+
 func (g *VTGrid) clearRow(r int, startCol, endCol int) {
 	if r < 0 || r >= g.Rows {
 		return
