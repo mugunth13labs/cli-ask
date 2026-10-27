@@ -212,12 +212,7 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 				// Mouse Wheel
 				if btn == 64 { // Wheel Up
 					if x <= leftWidth {
-						dp.Chat.mu.Lock()
-						dp.Chat.HistScroll -= 3
-						if dp.Chat.HistScroll < 0 {
-							dp.Chat.HistScroll = 0
-						}
-						dp.Chat.mu.Unlock()
+						dp.Chat.ScrollHistory(-3)
 					} else {
 						dp.RightVT.ScrollPageUp(3)
 					}
@@ -225,17 +220,7 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 					return false
 				} else if btn == 65 { // Wheel Down
 					if x <= leftWidth {
-						dp.Chat.mu.Lock()
-						histH := dp.Chat.Height - dp.Chat.PromptVisibleLines() - 2
-						maxScroll := len(dp.Chat.ReversedLines) - histH
-						if maxScroll < 0 {
-							maxScroll = 0
-						}
-						dp.Chat.HistScroll += 3
-						if dp.Chat.HistScroll > maxScroll {
-							dp.Chat.HistScroll = maxScroll
-						}
-						dp.Chat.mu.Unlock()
+						dp.Chat.ScrollHistory(3)
 					} else {
 						dp.RightVT.ScrollPageDown(3)
 					}
@@ -249,37 +234,10 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 						dp.ActivePane = PaneLeft
 						dp.RightSelecting = false
 						dp.RightVT.ClearSelection()
-
-						visPrompt := dp.Chat.PromptVisibleLines()
-						dp.Chat.mu.Lock()
-						if row < visPrompt {
-							dp.Chat.ActiveRegion = RegionPrompt
-							dp.Chat.PromptRow = dp.Chat.PromptScroll + row
-							if dp.Chat.PromptRow >= len(dp.Chat.PromptLines) {
-								dp.Chat.PromptRow = len(dp.Chat.PromptLines) - 1
-							}
-							dp.Chat.PromptCol = x - 1 - 4
-							if dp.Chat.PromptCol < 0 {
-								dp.Chat.PromptCol = 0
-							}
-							dp.Chat.Selecting = false
-						} else if row > visPrompt {
-							dp.Chat.ActiveRegion = RegionHistory
-							histIdx := (row - visPrompt - 1) + dp.Chat.HistScroll
-							dp.Chat.HistRow = histIdx
-							dp.Chat.HistCol = x - 1
-							dp.Chat.Selecting = true
-							dp.Chat.SelStartR = histIdx
-							dp.Chat.SelStartC = x - 1
-							dp.Chat.SelEndR = histIdx
-							dp.Chat.SelEndC = x - 1
-						}
-						dp.Chat.mu.Unlock()
+						dp.Chat.HandleClick(x-1, row)
 					} else if x > leftWidth+1 { // Right Pane
 						dp.ActivePane = PaneRight
-						dp.Chat.mu.Lock()
-						dp.Chat.Selecting = false
-						dp.Chat.mu.Unlock()
+						dp.Chat.FinishSelection() // clear selection in chat
 
 						dp.RightSelecting = true
 						dp.RightVT.HasSelection = true
@@ -296,22 +254,7 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 				// Left Mouse Drag (btn == 32, M)
 				if btn == 32 && !isRelease {
 					if dp.ActivePane == PaneLeft && dp.Chat.Selecting {
-						clampedX := x
-						if clampedX < 1 {
-							clampedX = 1
-						}
-						if clampedX > leftWidth {
-							clampedX = leftWidth
-						}
-						visPrompt := dp.Chat.PromptVisibleLines()
-						histIdx := (row - visPrompt - 1) + dp.Chat.HistScroll
-						if histIdx < 0 {
-							histIdx = 0
-						}
-						dp.Chat.mu.Lock()
-						dp.Chat.SelEndR = histIdx
-						dp.Chat.SelEndC = clampedX - 1
-						dp.Chat.mu.Unlock()
+						dp.Chat.HandleDrag(x-1, row, leftWidth)
 						dp.Render()
 						return false
 					} else if dp.ActivePane == PaneRight && dp.RightSelecting {
@@ -333,7 +276,7 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 				// Mouse Release (m)
 				if isRelease {
 					if dp.ActivePane == PaneLeft && dp.Chat.Selecting {
-						selected := dp.Chat.GetSelectedText()
+						selected := dp.Chat.FinishSelection()
 						if selected != "" {
 							copyToClipboard(selected)
 						}
@@ -441,9 +384,7 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 				if contentHeight < 4 {
 					contentHeight = 4
 				}
-				dp.Chat.Width = leftWidth
-				dp.Chat.Height = contentHeight
-				dp.Chat.rebuildReversedLines()
+				dp.Chat.Resize(leftWidth, contentHeight)
 				dp.RightVT.Resize(contentHeight, rightWidth)
 				_ = dp.RightPTY.Resize(contentHeight, rightWidth)
 				dp.mu.Unlock()

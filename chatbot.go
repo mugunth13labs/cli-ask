@@ -2,13 +2,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // isChatCommand checks if a line is an explicit slash command.
@@ -129,10 +132,15 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	}
 	defer cleanup()
 
+	var renderMu sync.Mutex
+	curW, curH := w, h
 	render := func() {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+
 		var sb strings.Builder
 		sb.WriteString(ansiHideCursor)
-		for r := 0; r < h; r++ {
+		for r := 0; r < curH; r++ {
 			sb.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[K", r+1))
 			sb.WriteString(chat.RenderRow(r))
 		}
@@ -145,13 +153,82 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	chat.OnNeedRender = render
 	render()
 
+	// Resize poller
+	isExiting := false
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	go func() {
+		for range ticker.C {
+			if isExiting {
+				return
+			}
+			newW, newH := getTerminalSize(fd)
+			if newW > 0 && newH > 0 && (newW != curW || newH != curH) {
+				renderMu.Lock()
+				curW, curH = newW, newH
+				chat.Resize(curW, curH)
+				renderMu.Unlock()
+				render()
+			}
+		}
+	}()
+
 	buf := make([]byte, 512)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
+			isExiting = true
 			return nil
 		}
-		if shouldExit := chat.HandleKey(buf[:n]); shouldExit {
+
+		inBuf := buf[:n]
+
+		// Mouse SGR: \x1b[<btn;x;yM or \x1b[<btn;x;ym
+		if bytes.HasPrefix(inBuf, []byte("\x1b[<")) {
+			s := string(inBuf)
+			if strings.HasSuffix(s, "M") || strings.HasSuffix(s, "m") {
+				isRelease := strings.HasSuffix(s, "m")
+				raw := s[3 : len(s)-1]
+				parts := strings.Split(raw, ";")
+				if len(parts) == 3 {
+					btn, _ := strconv.Atoi(parts[0])
+					x, _ := strconv.Atoi(parts[1])
+					y, _ := strconv.Atoi(parts[2])
+
+					row := y - 1 // 0-based content row in standalone mode
+					col := x - 1
+
+					if btn == 64 { // Wheel Up
+						chat.ScrollHistory(-3)
+						render()
+						continue
+					} else if btn == 65 { // Wheel Down
+						chat.ScrollHistory(3)
+						render()
+						continue
+					} else if btn == 0 && !isRelease { // Left Click
+						chat.HandleClick(col, row)
+						render()
+						continue
+					} else if btn == 32 && !isRelease { // Left Drag
+						chat.HandleDrag(col, row, curW)
+						render()
+						continue
+					} else if isRelease { // Mouse Release
+						selected := chat.FinishSelection()
+						if selected != "" {
+							copyToClipboard(selected)
+						}
+						render()
+						continue
+					}
+				}
+			}
+			continue
+		}
+
+		if shouldExit := chat.HandleKey(inBuf); shouldExit {
+			isExiting = true
 			return nil
 		}
 		render()

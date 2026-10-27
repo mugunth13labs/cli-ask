@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -85,6 +86,17 @@ func NewChatUI(cfg *Config, session *Session, opts QueryOptions, initialPrompt s
 
 	ui.rebuildReversedLines()
 	return ui
+}
+
+func (ui *ChatUI) Resize(w, h int) {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+
+	ui.Width = w
+	ui.Height = h
+	ui.rebuildReversedLines()
+	ui.adjustPromptScroll()
+	ui.adjustHistScroll()
 }
 
 func (ui *ChatUI) rebuildReversedLines() {
@@ -298,10 +310,7 @@ func (ui *ChatUI) isHistSelected(r, c int) bool {
 	return true
 }
 
-func (ui *ChatUI) GetSelectedText() string {
-	ui.mu.Lock()
-	defer ui.mu.Unlock()
-
+func (ui *ChatUI) getSelectedTextLocked() string {
 	if !ui.Selecting {
 		return ""
 	}
@@ -342,7 +351,113 @@ func (ui *ChatUI) GetSelectedText() string {
 	return sb.String()
 }
 
+func (ui *ChatUI) FinishSelection() string {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+
+	if !ui.Selecting {
+		return ""
+	}
+	return ui.getSelectedTextLocked()
+}
+
+func (ui *ChatUI) ScrollHistory(delta int) {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+
+	histH := ui.Height - ui.PromptVisibleLines() - 2
+	maxScroll := len(ui.ReversedLines) - histH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	ui.HistScroll += delta
+	if ui.HistScroll < 0 {
+		ui.HistScroll = 0
+	}
+	if ui.HistScroll > maxScroll {
+		ui.HistScroll = maxScroll
+	}
+}
+
+func (ui *ChatUI) HandleClick(col, row int) {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+
+	visPrompt := ui.PromptVisibleLines()
+	if row < visPrompt {
+		ui.ActiveRegion = RegionPrompt
+		ui.PromptRow = ui.PromptScroll + row
+		if ui.PromptRow >= len(ui.PromptLines) {
+			ui.PromptRow = len(ui.PromptLines) - 1
+		}
+		ui.PromptCol = col - 4 // skip ">>> " prefix
+		if ui.PromptCol < 0 {
+			ui.PromptCol = 0
+		}
+		if ui.PromptRow >= 0 && ui.PromptRow < len(ui.PromptLines) {
+			curLineLen := len([]rune(ui.PromptLines[ui.PromptRow]))
+			if ui.PromptCol > curLineLen {
+				ui.PromptCol = curLineLen
+			}
+		}
+		ui.Selecting = false
+	} else if row > visPrompt {
+		ui.ActiveRegion = RegionHistory
+		histIdx := (row - visPrompt - 1) + ui.HistScroll
+		if histIdx < 0 {
+			histIdx = 0
+		}
+		if histIdx >= len(ui.ReversedLines) {
+			histIdx = len(ui.ReversedLines) - 1
+		}
+		ui.HistRow = histIdx
+		ui.HistCol = col
+		ui.Selecting = true
+		ui.SelStartR = histIdx
+		ui.SelStartC = col
+		ui.SelEndR = histIdx
+		ui.SelEndC = col
+	}
+}
+
+func (ui *ChatUI) HandleDrag(col, row, maxW int) {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+
+	if !ui.Selecting {
+		return
+	}
+	clampedCol := col
+	if clampedCol < 0 {
+		clampedCol = 0
+	}
+	if clampedCol >= maxW {
+		clampedCol = maxW - 1
+	}
+	visPrompt := ui.PromptVisibleLines()
+	histIdx := (row - visPrompt - 1) + ui.HistScroll
+	if histIdx < 0 {
+		histIdx = 0
+	}
+	if histIdx >= len(ui.ReversedLines) {
+		histIdx = len(ui.ReversedLines) - 1
+	}
+	ui.SelEndR = histIdx
+	ui.SelEndC = clampedCol
+}
+
+func (ui *ChatUI) GetSelectedText() string {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	return ui.getSelectedTextLocked()
+}
+
 func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
+	// Guard against SGR mouse escape sequences reaching key handler
+	if bytes.HasPrefix(inBuf, []byte("\x1b[<")) {
+		return false
+	}
+
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
@@ -381,7 +496,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	// 2. Ctrl+C: Copy selection if active, cancel generation if streaming, else quit
 	if len(inBuf) == 1 && inBuf[0] == 3 {
 		if ui.Selecting {
-			selected := ui.GetSelectedText()
+			selected := ui.getSelectedTextLocked()
 			if selected != "" {
 				copyToClipboard(selected)
 			}
@@ -612,15 +727,22 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 	}
 
 	streamOpts := ui.Opts
+	var lastRender time.Time
 	streamOpts.OnToken = func(tok string) {
 		ui.mu.Lock()
-		defer ui.mu.Unlock()
-
 		ui.StreamContent.WriteString(tok)
 		ui.rebuildReversedLines()
+		renderFn := ui.OnNeedRender
 
-		if ui.OnNeedRender != nil {
-			ui.OnNeedRender()
+		now := time.Now()
+		shouldRender := now.Sub(lastRender) >= 20*time.Millisecond
+		if shouldRender {
+			lastRender = now
+		}
+		ui.mu.Unlock()
+
+		if shouldRender && renderFn != nil {
+			renderFn()
 		}
 	}
 
@@ -642,9 +764,10 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 	}
 	ui.StreamContent.Reset()
 	ui.rebuildReversedLines()
+	renderFn := ui.OnNeedRender
 	ui.mu.Unlock()
 
-	if ui.OnNeedRender != nil {
-		ui.OnNeedRender()
+	if renderFn != nil {
+		renderFn()
 	}
 }
