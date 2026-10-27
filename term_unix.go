@@ -11,6 +11,13 @@ type TermState struct {
 	termios syscall.Termios
 }
 
+type winsize struct {
+	Row    uint16
+	Col    uint16
+	Xpixel uint16
+	Ypixel uint16
+}
+
 func makeRaw(fd uintptr) (*TermState, error) {
 	var termios syscall.Termios
 	_, _, err := syscall.Syscall6(syscall.SYS_IOCTL, fd, uintptr(tcgets), uintptr(unsafe.Pointer(&termios)), 0, 0, 0)
@@ -49,4 +56,13 @@ func restoreTerm(fd uintptr, state *TermState) error {
 		return err
 	}
 	return nil
+}
+
+func getTerminalSize(fd uintptr) (width, height int) {
+	var ws winsize
+	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(tiocgwinsz), uintptr(unsafe.Pointer(&ws)))
+	if err == 0 && ws.Col > 0 && ws.Row > 0 {
+		return int(ws.Col), int(ws.Row)
+	}
+	return 80, 24
 }

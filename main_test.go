@@ -533,3 +533,16 @@ func TestIncompatibleChatbotFileOutput(t *testing.T) {
 		t.Errorf("expected valid query with -o, got error: %v", err)
 	}
 }
+
+func TestWrapText(t *testing.T) {
+	input := "The quick brown fox jumps over the lazy dog"
+	wrapped := wrapText(input, 15)
+	if len(wrapped) < 3 {
+		t.Fatalf("expected at least 3 wrapped lines, got %d: %v", len(wrapped), wrapped)
+	}
+	for _, line := range wrapped {
+		if len(line) > 15 {
+			t.Errorf("line exceeded max width 15: %q", line)
+		}
+	}
+}

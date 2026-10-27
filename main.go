@@ -394,11 +394,11 @@ func main() {
 	// Dispatch chatbot immediately before reading stdin prompts
 	if parsed.Action == "chatbot" {
 		if parsed.Split {
-			handled, err := tryLaunchSplitSession(&parsed)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Split mode error: %v\n", err)
-			}
-			if handled {
+			if isStdinTerminal && isStdoutTerminal {
+				if err := RunDualPaneWorkspace(cfg, parsed.Prompt, queryOpts); err != nil {
+					fmt.Fprintf(os.Stderr, "Dual pane error: %v\n", err)
+					os.Exit(1)
+				}
 				return
 			}
 		}
