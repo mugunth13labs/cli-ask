@@ -22,6 +22,20 @@ type VTGrid struct {
 	SavedCol     int
 	CurrentStyle string
 	Cells        [][]Cell
+	Scrollback   [][]Cell // ring buffer of lines scrolled off top
+	ScrollOffset int      // 0 = bottom (live view), >0 = scrolled up
+
+	// Selection state
+	HasSelection bool
+	SelStartRow  int
+	SelStartCol  int
+	SelEndRow    int
+	SelEndCol    int
+
+	// Visual navigation cursor (for navigating past history)
+	NavRow    int
+	NavCol    int
+	IsNavMode bool
 }
 
 func NewVTGrid(rows, cols int) *VTGrid {
@@ -33,8 +47,9 @@ func NewVTGrid(rows, cols int) *VTGrid {
 	}
 
 	grid := &VTGrid{
-		Rows: rows,
-		Cols: cols,
+		Rows:       rows,
+		Cols:       cols,
+		Scrollback: make([][]Cell, 0, 1024),
 	}
 	grid.initCells(rows, cols)
 	return grid
@@ -89,6 +104,14 @@ func (g *VTGrid) scrollUp() {
 	if g.Rows <= 0 {
 		return
 	}
+	// Save the row about to be scrolled off into Scrollback
+	topRowCopy := make([]Cell, g.Cols)
+	copy(topRowCopy, g.Cells[0])
+	g.Scrollback = append(g.Scrollback, topRowCopy)
+	if len(g.Scrollback) > 5000 {
+		g.Scrollback = g.Scrollback[len(g.Scrollback)-5000:]
+	}
+
 	// Shift rows up by 1
 	copy(g.Cells[0:], g.Cells[1:])
 	// Clear the bottom row
@@ -97,6 +120,33 @@ func (g *VTGrid) scrollUp() {
 		bottom[c] = Cell{Rune: ' '}
 	}
 	g.Cells[g.Rows-1] = bottom
+}
+
+func (g *VTGrid) ScrollPageUp(n int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ScrollOffset += n
+	maxScroll := len(g.Scrollback)
+	if g.ScrollOffset > maxScroll {
+		g.ScrollOffset = maxScroll
+	}
+}
+
+func (g *VTGrid) ScrollPageDown(n int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ScrollOffset -= n
+	if g.ScrollOffset < 0 {
+		g.ScrollOffset = 0
+	}
+}
+
+func (g *VTGrid) SnapToBottom() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ScrollOffset = 0
+	g.IsNavMode = false
+	g.HasSelection = false
 }
 
 func (g *VTGrid) clearRow(r int, startCol, endCol int) {
@@ -129,7 +179,6 @@ func (g *VTGrid) Write(data []byte) {
 			if i+1 < n {
 				next := data[i+1]
 				if next == '[' { // CSI sequence
-					// Read until command character (letter or ~)
 					j := i + 2
 					for j < n && ((data[j] >= '0' && data[j] <= '9') || data[j] == ';' || data[j] == '?' || data[j] == ' ' || data[j] == '>') {
 						j++
@@ -141,7 +190,6 @@ func (g *VTGrid) Write(data []byte) {
 						i = j + 1
 						continue
 					} else {
-						// Incomplete sequence at end of buffer
 						break
 					}
 				} else if next == ']' { // OSC sequence: \x1b] ... \x07 or \x1b] ... \x1b\
@@ -180,7 +228,6 @@ func (g *VTGrid) Write(data []byte) {
 					continue
 				}
 			}
-			// Unrecognized bare escape
 			i++
 			continue
 		}
@@ -234,7 +281,6 @@ func (g *VTGrid) Write(data []byte) {
 
 		g.CursorCol++
 		if g.CursorCol >= g.Cols {
-			// Autowrap to next line
 			g.CursorCol = 0
 			g.CursorRow++
 			if g.CursorRow >= g.Rows {
@@ -248,7 +294,6 @@ func (g *VTGrid) Write(data []byte) {
 }
 
 func (g *VTGrid) handleCSI(cmd byte, params string) {
-	// Parse semicolon-separated integer arguments
 	var args []int
 	if params != "" && !strings.HasPrefix(params, "?") {
 		parts := strings.Split(params, ";")
@@ -318,17 +363,17 @@ func (g *VTGrid) handleCSI(cmd byte, params string) {
 	case 'J': // Erase in Display
 		mode := getArg(0, 0)
 		switch mode {
-		case 0: // Cursor to end of screen
+		case 0:
 			g.clearRow(g.CursorRow, g.CursorCol, g.Cols)
 			for r := g.CursorRow + 1; r < g.Rows; r++ {
 				g.clearRow(r, 0, g.Cols)
 			}
-		case 1: // Start of screen to cursor
+		case 1:
 			for r := 0; r < g.CursorRow; r++ {
 				g.clearRow(r, 0, g.Cols)
 			}
 			g.clearRow(g.CursorRow, 0, g.CursorCol+1)
-		case 2, 3: // Clear entire screen
+		case 2, 3:
 			for r := 0; r < g.Rows; r++ {
 				g.clearRow(r, 0, g.Cols)
 			}
@@ -339,15 +384,15 @@ func (g *VTGrid) handleCSI(cmd byte, params string) {
 	case 'K': // Erase in Line
 		mode := getArg(0, 0)
 		switch mode {
-		case 0: // Cursor to end of line
+		case 0:
 			g.clearRow(g.CursorRow, g.CursorCol, g.Cols)
-		case 1: // Start of line to cursor
+		case 1:
 			g.clearRow(g.CursorRow, 0, g.CursorCol+1)
-		case 2: // Clear entire line
+		case 2:
 			g.clearRow(g.CursorRow, 0, g.Cols)
 		}
 
-	case 'm': // SGR (Select Graphic Rendition) styling
+	case 'm': // SGR styling
 		if len(args) == 0 || (len(args) == 1 && args[0] == 0) {
 			g.CurrentStyle = ""
 		} else {
@@ -364,29 +409,136 @@ func (g *VTGrid) handleCSI(cmd byte, params string) {
 	}
 }
 
-// RenderRow returns the formatted string for row `r`, clipped and padded to `Cols` width.
-// Opens ANSI styles and guarantees `\x1b[0m` reset at the end so styles never bleed!
+// isSelected checks whether a visible screen coordinate (r, c) falls inside the selection range
+func (g *VTGrid) isSelected(r, c int) bool {
+	if !g.HasSelection {
+		return false
+	}
+	sR, sC := g.SelStartRow, g.SelStartCol
+	eR, eC := g.SelEndRow, g.SelEndCol
+	if sR > eR || (sR == eR && sC > eC) {
+		sR, eR = eR, sR
+		sC, eC = eC, sC
+	}
+
+	if r < sR || r > eR {
+		return false
+	}
+	if r == sR && r == eR {
+		return c >= sC && c <= eC
+	}
+	if r == sR {
+		return c >= sC
+	}
+	if r == eR {
+		return c <= eC
+	}
+	return true
+}
+
+func (g *VTGrid) GetSelectedText() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.HasSelection {
+		return ""
+	}
+
+	sR, sC := g.SelStartRow, g.SelStartCol
+	eR, eC := g.SelEndRow, g.SelEndCol
+	if sR > eR || (sR == eR && sC > eC) {
+		sR, eR = eR, sR
+		sC, eC = eC, sC
+	}
+
+	var sb strings.Builder
+	for r := sR; r <= eR; r++ {
+		row := g.getRowCells(r)
+		if row == nil {
+			continue
+		}
+		start := 0
+		if r == sR {
+			start = sC
+		}
+		end := g.Cols - 1
+		if r == eR {
+			end = eC
+		}
+		if start < 0 {
+			start = 0
+		}
+		if end >= g.Cols {
+			end = g.Cols - 1
+		}
+
+		lineStr := ""
+		for c := start; c <= end; c++ {
+			if row[c].Rune == 0 || row[c].Rune == ' ' {
+				lineStr += " "
+			} else {
+				lineStr += string(row[c].Rune)
+			}
+		}
+		sb.WriteString(strings.TrimRight(lineStr, " "))
+		if r < eR {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// getRowCells returns the cell array for visible row r, factoring in ScrollOffset
+func (g *VTGrid) getRowCells(r int) []Cell {
+	if r < 0 || r >= g.Rows {
+		return nil
+	}
+	if g.ScrollOffset == 0 {
+		return g.Cells[r]
+	}
+
+	totalScrollback := len(g.Scrollback)
+	virtualIdx := totalScrollback - g.ScrollOffset + r
+	if virtualIdx < 0 {
+		return nil
+	}
+	if virtualIdx < totalScrollback {
+		return g.Scrollback[virtualIdx]
+	}
+	liveIdx := virtualIdx - totalScrollback
+	if liveIdx >= 0 && liveIdx < g.Rows {
+		return g.Cells[liveIdx]
+	}
+	return nil
+}
+
+// RenderRow returns the formatted string for visible row `r`
 func (g *VTGrid) RenderRow(r int) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if r < 0 || r >= g.Rows {
+	row := g.getRowCells(r)
+	if row == nil {
 		return strings.Repeat(" ", g.Cols)
 	}
 
 	var b strings.Builder
 	lastStyle := ""
 
-	row := g.Cells[r]
 	for c := 0; c < g.Cols; c++ {
 		cell := row[c]
-		if cell.Style != lastStyle {
-			if cell.Style == "" {
+		style := cell.Style
+		if g.isSelected(r, c) {
+			style = "\x1b[7m" // Invert colors for selected text
+		}
+
+		if style != lastStyle {
+			if style == "" {
 				b.WriteString("\x1b[0m")
 			} else {
-				b.WriteString(cell.Style)
+				b.WriteString(style)
 			}
-			lastStyle = cell.Style
+			lastStyle = style
 		}
 
 		if cell.Rune == 0 || cell.Rune == ' ' {
@@ -396,7 +548,6 @@ func (g *VTGrid) RenderRow(r int) string {
 		}
 	}
 
-	// Always reset style at the end of the line
 	if lastStyle != "" {
 		b.WriteString("\x1b[0m")
 	}

@@ -15,14 +15,23 @@ type DarwinPTY struct {
 	cmd    *exec.Cmd
 }
 
-	// winsize is declared in term_unix.go
-
 const (
 	ioctlTIOCPTYGNAME = 0x40807464 // Darwin ioctl to get slave path
 	ioctlTIOCSWINSZ   = 0x80087467 // Darwin ioctl to set window size
 )
 
 func StartPTY(rows, cols int) (PTYSession, error) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+		if _, err := os.Stat(shell); err != nil {
+			shell = "/bin/bash"
+		}
+	}
+	return StartPTYCommand(rows, cols, shell)
+}
+
+func StartPTYCommand(rows, cols int, command string, args ...string) (PTYSession, error) {
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open /dev/ptmx: %w", err)
@@ -50,22 +59,12 @@ func StartPTY(rows, cols int) (PTYSession, error) {
 	ws := winsize{Row: uint16(rows), Col: uint16(cols)}
 	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), uintptr(ioctlTIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/zsh"
-		if _, err := os.Stat(shell); err != nil {
-			shell = "/bin/bash"
-		}
-	}
-
-	cmd := exec.Command(shell, "-i")
+	cmd := exec.Command(command, args...)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,
-		Setctty: true,
-		Ctty:    0,
+		Setsid: true,
 	}
 
 	cmd.Env = append(os.Environ(),
@@ -77,7 +76,7 @@ func StartPTY(rows, cols int) (PTYSession, error) {
 
 	if err := cmd.Start(); err != nil {
 		master.Close()
-		return nil, fmt.Errorf("start shell %s: %w", shell, err)
+		return nil, fmt.Errorf("start %s: %w", command, err)
 	}
 
 	return &DarwinPTY{

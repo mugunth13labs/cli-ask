@@ -1,47 +1,39 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 )
 
 type ActivePane int
 
 const (
-	PaneLeft  ActivePane = 0 // AI Chatbot (-i mode)
+	PaneLeft  ActivePane = 0 // ask -i (Chat)
 	PaneRight ActivePane = 1 // Live Shell Terminal
 )
 
 type DualPaneWorkspace struct {
-	mu            sync.Mutex
-	Width         int
-	Height        int
-	ActivePane    ActivePane
-	LeftLines     []string // formatted conversation history
-	LeftScroll    int      // scroll offset for history
-	InputBuffer   []rune   // user typing buffer for chat
-	CursorPos     int      // cursor position in InputBuffer
-	History       []string // prompt history for Up/Down recall
-	HistIdx       int      // index in prompt history
-	Session       *Session
-	Config        *Config
-	Opts          QueryOptions
-	VTGrid        *VTGrid
-	PTY           PTYSession
-	IsStreaming   bool
-	IsExiting     bool
-	ActiveCancel  context.CancelFunc
+	mu         sync.Mutex
+	Width      int
+	Height     int
+	ActivePane ActivePane
+
+	LeftPTY  PTYSession
+	RightPTY PTYSession
+
+	LeftVT  *VTGrid
+	RightVT *VTGrid
+
+	IsExiting bool
 }
 
-func NewDualPaneWorkspace(cfg *Config, session *Session, opts QueryOptions, initialPrompt string) (*DualPaneWorkspace, error) {
+func NewDualPaneWorkspace(initialPrompt string) (*DualPaneWorkspace, error) {
 	fd := os.Stdout.Fd()
 	w, h := getTerminalSize(fd)
 	if w < 60 {
@@ -53,125 +45,48 @@ func NewDualPaneWorkspace(cfg *Config, session *Session, opts QueryOptions, init
 
 	leftWidth := int(float64(w) * 0.40)
 	rightWidth := w - leftWidth - 1
-	contentHeight := h - 3
+	contentHeight := h - 2 // Row 1: Tab Pills, Row 2: Divider Line
 	if contentHeight < 4 {
 		contentHeight = 4
 	}
 
-	// Initialize PTY and Shell
-	ptySession, err := StartPTY(contentHeight, rightWidth)
+	// 1. Determine current executable for Pane 1 (ask -i)
+	execPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("failed to start terminal PTY: %w", err)
+		execPath = os.Args[0]
 	}
 
-	grid := NewVTGrid(contentHeight, rightWidth)
+	askArgs := []string{"-i"}
+	if initialPrompt != "" {
+		askArgs = append(askArgs, initialPrompt)
+	}
+
+	leftPTY, err := StartPTYCommand(contentHeight, leftWidth, execPath, askArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start ask -i PTY: %w", err)
+	}
+
+	// 2. Start default shell for Pane 2
+	rightPTY, err := StartPTY(contentHeight, rightWidth)
+	if err != nil {
+		_ = leftPTY.Close()
+		return nil, fmt.Errorf("failed to start shell PTY: %w", err)
+	}
+
+	leftVT := NewVTGrid(contentHeight, leftWidth)
+	rightVT := NewVTGrid(contentHeight, rightWidth)
 
 	dp := &DualPaneWorkspace{
-		Width:        w,
-		Height:       h,
-		ActivePane:   PaneLeft, // Starts focused on Left Pane (AI Chat)
-		LeftLines:    []string{},
-		LeftScroll:   0,
-		InputBuffer:  []rune{},
-		CursorPos:    0,
-		History:      []string{},
-		HistIdx:      -1,
-		Session:      session,
-		Config:       cfg,
-		Opts:         opts,
-		VTGrid:       grid,
-		PTY:          ptySession,
-	}
-
-	// Populate left pane with prior session messages
-	if session != nil && len(session.Messages) > 0 {
-		for _, m := range session.Messages {
-			dp.appendMessageToLeft(m.Role, m.Content)
-		}
-	}
-
-	if initialPrompt != "" {
-		dp.InputBuffer = []rune(initialPrompt)
-		dp.CursorPos = len(dp.InputBuffer)
+		Width:      w,
+		Height:     h,
+		ActivePane: PaneLeft, // Starts focused on ask -i
+		LeftPTY:    leftPTY,
+		RightPTY:   rightPTY,
+		LeftVT:     leftVT,
+		RightVT:    rightVT,
 	}
 
 	return dp, nil
-}
-
-// wrapText splits text into lines that fit within maxWidth columns
-func wrapText(text string, maxWidth int) []string {
-	if maxWidth <= 4 {
-		maxWidth = 4
-	}
-
-	var result []string
-	rawLines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-
-	for _, line := range rawLines {
-		if line == "" {
-			result = append(result, "")
-			continue
-		}
-
-		runes := []rune(line)
-		for len(runes) > 0 {
-			if len(runes) <= maxWidth {
-				result = append(result, string(runes))
-				break
-			}
-			breakIdx := maxWidth
-			foundSpace := false
-			for i := maxWidth; i >= maxWidth/2; i-- {
-				if runes[i] == ' ' || runes[i] == '\t' {
-					breakIdx = i
-					foundSpace = true
-					break
-				}
-			}
-			if foundSpace {
-				result = append(result, string(runes[:breakIdx]))
-				runes = []rune(strings.TrimLeft(string(runes[breakIdx:]), " \t"))
-			} else {
-				result = append(result, string(runes[:maxWidth]))
-				runes = runes[maxWidth:]
-			}
-		}
-	}
-	return result
-}
-
-func (dp *DualPaneWorkspace) appendMessageToLeft(role, content string) {
-	leftWidth := int(float64(dp.Width) * 0.40)
-	contentWidth := leftWidth - 2
-	if contentWidth < 4 {
-		contentWidth = 4
-	}
-
-	var header string
-	if role == "user" {
-		header = "─── You ────────────────────────"
-	} else {
-		header = fmt.Sprintf("─── ask [%s] ───", dp.Config.Model)
-	}
-	if len(header) > contentWidth {
-		header = header[:contentWidth]
-	}
-
-	dp.LeftLines = append(dp.LeftLines, header)
-	wrapped := wrapText(content, contentWidth)
-	dp.LeftLines = append(dp.LeftLines, wrapped...)
-	dp.LeftLines = append(dp.LeftLines, "") // Blank spacing
-
-	// Auto-scroll to bottom of conversation
-	historyHeight := (dp.Height - 3) - 2
-	if historyHeight < 1 {
-		historyHeight = 1
-	}
-	if len(dp.LeftLines) > historyHeight {
-		dp.LeftScroll = len(dp.LeftLines) - historyHeight
-	} else {
-		dp.LeftScroll = 0
-	}
 }
 
 func (dp *DualPaneWorkspace) Render() {
@@ -186,42 +101,38 @@ func (dp *DualPaneWorkspace) Render() {
 	h := dp.Height
 	leftWidth := int(float64(w) * 0.40)
 	rightWidth := w - leftWidth - 1
-	contentHeight := h - 3
+	contentHeight := h - 2
 	if contentHeight < 4 {
 		contentHeight = 4
 	}
-	historyHeight := contentHeight - 2
 
 	var b strings.Builder
 	b.WriteString(ansiHideCursor)
 
-	// 1. Draw Header Bar (Row 1)
-	leftHeader := "  AI CHATBOT (-i mode)"
+	// 1. Draw Tab Pills Bar (Row 1)
+	leftPill := "  [ 1: ask -i (Chat) ]  "
 	if dp.ActivePane == PaneLeft {
-		leftHeader = "● AI CHATBOT [ACTIVE]"
+		leftPill = "\x1b[7m\x1b[1m [ 1: ask -i (Chat) ] \x1b[0m"
 	}
-	rightHeader := "  LIVE SHELL"
+	rightPill := "  [ 2: Terminal ]  "
 	if dp.ActivePane == PaneRight {
-		rightHeader = "● LIVE SHELL [ACTIVE]"
+		rightPill = "\x1b[7m\x1b[1m [ 2: Terminal ] \x1b[0m"
 	}
 
-	leftHeaderPadded := fmt.Sprintf("%-*s", leftWidth, leftHeader)
-	if len(leftHeaderPadded) > leftWidth {
-		leftHeaderPadded = leftHeaderPadded[:leftWidth]
+	hint := "Ctrl+T: Switch | PgUp/Dn: Scroll | Shift+Arrows: Select | Ctrl+C: Copy "
+	tabsLine := leftPill + " │ " + rightPill
+	visibleTabLen := 24 + 3 + 19
+	remaining := w - visibleTabLen - len(hint)
+	if remaining < 0 {
+		remaining = 0
 	}
-	rightHeaderPadded := fmt.Sprintf("%-*s", rightWidth, rightHeader)
-	if len(rightHeaderPadded) > rightWidth {
-		rightHeaderPadded = rightHeaderPadded[:rightWidth]
-	}
+	headerRow := tabsLine + strings.Repeat(" ", remaining) + "\x1b[90m" + hint + "\x1b[0m"
 
-	b.WriteString("\x1b[1;1H\x1b[7m")
-	b.WriteString(leftHeaderPadded)
-	b.WriteString("│")
-	b.WriteString(rightHeaderPadded)
-	b.WriteString("\x1b[0m")
+	b.WriteString("\x1b[1;1H\x1b[K")
+	b.WriteString(headerRow)
 
 	// 2. Draw Separator Line (Row 2)
-	b.WriteString("\x1b[2;1H")
+	b.WriteString("\x1b[2;1H\x1b[K")
 	b.WriteString(strings.Repeat("─", leftWidth))
 	b.WriteString("┼")
 	b.WriteString(strings.Repeat("─", rightWidth))
@@ -231,74 +142,38 @@ func (dp *DualPaneWorkspace) Render() {
 		rowANSI := 3 + r
 		b.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[K", rowANSI))
 
-		// Left Column Content
-		var leftStr string
-		if r < historyHeight {
-			// Conversation history
-			lineIdx := dp.LeftScroll + r
-			if lineIdx >= 0 && lineIdx < len(dp.LeftLines) {
-				leftStr = dp.LeftLines[lineIdx]
-			}
-		} else if r == historyHeight {
-			// Input divider
-			leftStr = strings.Repeat("─", leftWidth)
-		} else {
-			// Input prompt line: ">>> ..."
-			promptStr := ">>> " + string(dp.InputBuffer)
-			leftRunes := []rune(promptStr)
-			if len(leftRunes) > leftWidth {
-				// Scroll horizontally to keep cursor in view
-				offset := dp.CursorPos + 4 - leftWidth + 2
-				if offset < 0 {
-					offset = 0
-				}
-				if offset < len(leftRunes) {
-					leftStr = string(leftRunes[offset:])
-				}
-			} else {
-				leftStr = promptStr
-			}
-		}
-
-		// Pad or clip leftStr to leftWidth
-		leftRunes := []rune(leftStr)
-		if len(leftRunes) > leftWidth {
-			leftStr = string(leftRunes[:leftWidth])
-		} else {
-			leftStr = leftStr + strings.Repeat(" ", leftWidth-len(leftRunes))
-		}
-		b.WriteString(leftStr)
+		// Left Column Content: rendered from LeftVT
+		leftFormatted := dp.LeftVT.RenderRow(r)
+		b.WriteString(leftFormatted)
 
 		// Divider
 		b.WriteString("│")
 
-		// Right Column Content: Rendered from VTGrid
-		rightFormatted := dp.VTGrid.RenderRow(r)
+		// Right Column Content: rendered from RightVT
+		rightFormatted := dp.RightVT.RenderRow(r)
 		b.WriteString(rightFormatted)
 	}
 
-	// 4. Draw Status Footer (Row h)
-	b.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[7m", h))
-	statusText := " [Ctrl+T] Switch Pane | [Ctrl+Enter] Send | [PgUp/Dn] Scroll History | [/exit / exit] Quit"
-	statusPadded := fmt.Sprintf("%-*s", w, statusText)
-	if len(statusPadded) > w {
-		statusPadded = statusPadded[:w]
-	}
-	b.WriteString(statusPadded)
-	b.WriteString("\x1b[0m")
-
-	// 5. Place Cursor according to ActivePane
+	// 4. Place Cursor based on ActivePane
 	if dp.ActivePane == PaneLeft {
-		targetRow := 3 + (contentHeight - 1)
-		inputVisualPos := 4 + dp.CursorPos
-		if inputVisualPos >= leftWidth {
-			inputVisualPos = leftWidth - 1
+		cursorRow := dp.LeftVT.CursorRow
+		cursorCol := dp.LeftVT.CursorCol
+		if dp.LeftVT.IsNavMode {
+			cursorRow = dp.LeftVT.NavRow
+			cursorCol = dp.LeftVT.NavCol
 		}
-		targetCol := 1 + inputVisualPos
+		targetRow := 3 + cursorRow
+		targetCol := 1 + cursorCol
 		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", targetRow, targetCol, ansiShowCursor))
 	} else {
-		targetRow := 3 + dp.VTGrid.CursorRow
-		targetCol := leftWidth + 2 + dp.VTGrid.CursorCol
+		cursorRow := dp.RightVT.CursorRow
+		cursorCol := dp.RightVT.CursorCol
+		if dp.RightVT.IsNavMode {
+			cursorRow = dp.RightVT.NavRow
+			cursorCol = dp.RightVT.NavCol
+		}
+		targetRow := 3 + cursorRow
+		targetCol := leftWidth + 2 + cursorCol
 		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", targetRow, targetCol, ansiShowCursor))
 	}
 
@@ -306,303 +181,178 @@ func (dp *DualPaneWorkspace) Render() {
 	_ = os.Stdout.Sync()
 }
 
-func (dp *DualPaneWorkspace) handleInputByte(b byte, rest []byte) (consumed int, shouldExit bool) {
-	// Universal toggle key: Ctrl+T (0x14)
-	if b == 0x14 {
+func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
+	i := 0
+	n := len(inBuf)
+
+	for i < n {
+		b := inBuf[i]
+
+		// 1. Universal Pane Toggle: Ctrl+T (0x14)
+		if b == 0x14 {
+			dp.mu.Lock()
+			if dp.ActivePane == PaneLeft {
+				dp.ActivePane = PaneRight
+			} else {
+				dp.ActivePane = PaneLeft
+			}
+			dp.mu.Unlock()
+			dp.Render()
+			i++
+			continue
+		}
+
+		// 2. Check for Escape sequences: Arrows, Shift+Arrows, PgUp/PgDn, Mouse
+		if b == 0x1b && i+1 < n {
+			rest := inBuf[i+1:]
+
+			// Mouse reporting sequence: \x1b[<64;X;YM or \x1b[<65;X;YM
+			if len(rest) >= 5 && rest[0] == '[' && rest[1] == '<' {
+				endIdx := 2
+				for endIdx < len(rest) && (rest[endIdx] == ';' || (rest[endIdx] >= '0' && rest[endIdx] <= '9')) {
+					endIdx++
+				}
+				if endIdx < len(rest) && (rest[endIdx] == 'M' || rest[endIdx] == 'm') {
+					parts := strings.Split(string(rest[2:endIdx]), ";")
+					if len(parts) == 3 {
+						btn, _ := strconv.Atoi(parts[0])
+						x, _ := strconv.Atoi(parts[1])
+						leftWidth := int(float64(dp.Width) * 0.40)
+
+						// 64 = Wheel Up, 65 = Wheel Down
+						if btn == 64 {
+							if x <= leftWidth {
+								dp.LeftVT.ScrollPageUp(3)
+							} else {
+								dp.RightVT.ScrollPageUp(3)
+							}
+							dp.Render()
+						} else if btn == 65 {
+							if x <= leftWidth {
+								dp.LeftVT.ScrollPageDown(3)
+							} else {
+								dp.RightVT.ScrollPageDown(3)
+							}
+							dp.Render()
+						}
+					}
+					i += 2 + endIdx
+					continue
+				}
+			}
+
+			// PgUp: \x1b[5~
+			if len(rest) >= 3 && rest[0] == '[' && rest[1] == '5' && rest[2] == '~' {
+				if dp.ActivePane == PaneLeft {
+					dp.LeftVT.ScrollPageUp(5)
+				} else {
+					dp.RightVT.ScrollPageUp(5)
+				}
+				dp.Render()
+				i += 4
+				continue
+			}
+
+			// PgDn: \x1b[6~
+			if len(rest) >= 3 && rest[0] == '[' && rest[1] == '6' && rest[2] == '~' {
+				if dp.ActivePane == PaneLeft {
+					dp.LeftVT.ScrollPageDown(5)
+				} else {
+					dp.RightVT.ScrollPageDown(5)
+				}
+				dp.Render()
+				i += 4
+				continue
+			}
+
+			// Shift+Arrows / Ctrl+Shift+Arrows for text selection in Left Pane
+			if dp.ActivePane == PaneLeft && len(rest) >= 5 && rest[0] == '[' && rest[1] == '1' && rest[2] == ';' {
+				mod := rest[3] // '2' = Shift, '6' = Ctrl+Shift
+				dir := rest[4] // 'A'=Up, 'B'=Down, 'C'=Right, 'D'=Left
+
+				if mod == '2' || mod == '6' {
+					dp.LeftVT.mu.Lock()
+					if !dp.LeftVT.HasSelection {
+						dp.LeftVT.HasSelection = true
+						dp.LeftVT.SelStartRow = dp.LeftVT.CursorRow
+						dp.LeftVT.SelStartCol = dp.LeftVT.CursorCol
+						dp.LeftVT.NavRow = dp.LeftVT.CursorRow
+						dp.LeftVT.NavCol = dp.LeftVT.CursorCol
+						dp.LeftVT.IsNavMode = true
+					}
+
+					step := 1
+					if mod == '6' {
+						step = 5 // word jump
+					}
+
+					switch dir {
+					case 'A': // Up
+						dp.LeftVT.NavRow -= step
+						if dp.LeftVT.NavRow < 0 {
+							dp.LeftVT.NavRow = 0
+						}
+					case 'B': // Down
+						dp.LeftVT.NavRow += step
+						if dp.LeftVT.NavRow >= dp.LeftVT.Rows {
+							dp.LeftVT.NavRow = dp.LeftVT.Rows - 1
+						}
+					case 'C': // Right
+						dp.LeftVT.NavCol += step
+						if dp.LeftVT.NavCol >= dp.LeftVT.Cols {
+							dp.LeftVT.NavCol = dp.LeftVT.Cols - 1
+						}
+					case 'D': // Left
+						dp.LeftVT.NavCol -= step
+						if dp.LeftVT.NavCol < 0 {
+							dp.LeftVT.NavCol = 0
+						}
+					}
+					dp.LeftVT.SelEndRow = dp.LeftVT.NavRow
+					dp.LeftVT.SelEndCol = dp.LeftVT.NavCol
+					dp.LeftVT.mu.Unlock()
+
+					dp.Render()
+					i += 6
+					continue
+				}
+			}
+		}
+
+		// 3. Ctrl+C Copy action if Left Pane has text selected
+		if dp.ActivePane == PaneLeft && b == 3 {
+			if dp.LeftVT.HasSelection {
+				selected := dp.LeftVT.GetSelectedText()
+				if selected != "" {
+					copyToClipboard(selected)
+				}
+				dp.LeftVT.SnapToBottom()
+				dp.Render()
+				i++
+				continue
+			}
+		}
+
+		// 4. Forward input to focused pane's PTY
 		if dp.ActivePane == PaneLeft {
-			dp.ActivePane = PaneRight
+			// If Left Pane was scrolled or in selection mode, typing any character snaps to bottom
+			if dp.LeftVT.ScrollOffset > 0 || dp.LeftVT.IsNavMode || dp.LeftVT.HasSelection {
+				dp.LeftVT.SnapToBottom()
+				dp.Render()
+			}
+			_, _ = dp.LeftPTY.Write([]byte{b})
 		} else {
-			dp.ActivePane = PaneLeft
-		}
-		dp.Render()
-		return 1, false
-	}
-
-	// When focused on Right Pane (Live Shell), send all bytes directly to PTY master
-	if dp.ActivePane == PaneRight {
-		all := append([]byte{b}, rest...)
-		_, _ = dp.PTY.Write(all)
-		return len(all), false
-	}
-
-	// When focused on Left Pane (AI Chat):
-	// Check for Ctrl+C
-	if b == 3 {
-		if dp.IsStreaming && dp.ActiveCancel != nil {
-			dp.ActiveCancel()
-			dp.ActiveCancel = nil
-			return 1, false
-		}
-		return 1, true
-	}
-
-	// Check for Ctrl+D (EOF on empty input -> exit)
-	if b == 4 {
-		if len(dp.InputBuffer) == 0 {
-			return 1, true
-		}
-		return 1, false
-	}
-
-	// Check for Submit: Ctrl+Enter (LF=10 or CSI u \x1b[13;5u or \x1b[27;5;13~) or regular Enter (CR=13)
-	if b == 10 || b == 13 {
-		prompt := strings.TrimSpace(string(dp.InputBuffer))
-		dp.InputBuffer = []rune{}
-		dp.CursorPos = 0
-
-		if prompt == "" {
-			dp.Render()
-			return 1, false
-		}
-
-		// Check slash commands
-		if prompt == "/exit" || prompt == "/quit" || prompt == "/q" {
-			return 1, true
-		}
-		if prompt == "/clear" || prompt == "/c" {
-			dp.LeftLines = []string{}
-			dp.LeftScroll = 0
-			if dp.Session != nil {
-				dp.Session.Messages = []Message{}
-				_ = saveSession(dp.Session)
-			}
-			dp.Render()
-			return 1, false
-		}
-		if prompt == "/help" || prompt == "/?" {
-			dp.LeftLines = append(dp.LeftLines,
-				"─── Help ───────────────────────",
-				"Commands:",
-				"  /exit, /q    Exit dual-pane workspace",
-				"  /clear, /c   Clear conversation history",
-				"  Ctrl+T       Toggle focus between Chat & Shell",
-				"  Ctrl+Enter   Submit query to AI",
-				"  PgUp / PgDn  Scroll history",
-				"",
-			)
-			dp.Render()
-			return 1, false
-		}
-
-		// Record in prompt history
-		dp.History = append(dp.History, prompt)
-		dp.HistIdx = len(dp.History)
-
-		// Append user turn and trigger streaming
-		dp.appendMessageToLeft("user", prompt)
-		dp.Render()
-
-		go dp.executeChatQuery(prompt)
-		return 1, false
-	}
-
-	// Backspace
-	if b == 127 || b == 8 {
-		if dp.CursorPos > 0 {
-			dp.InputBuffer = append(dp.InputBuffer[:dp.CursorPos-1], dp.InputBuffer[dp.CursorPos:]...)
-			dp.CursorPos--
-			dp.Render()
-		}
-		return 1, false
-	}
-
-	// Escape sequences: Arrow keys, PgUp, PgDn, CSI u Ctrl+Enter, etc.
-	if b == 0x1b {
-		fullSeq := string(append([]byte{b}, rest...))
-		if strings.HasPrefix(fullSeq, "\x1b[13;5u") || strings.HasPrefix(fullSeq, "\x1b[27;5;13~") {
-			prompt := strings.TrimSpace(string(dp.InputBuffer))
-			dp.InputBuffer = []rune{}
-			dp.CursorPos = 0
-			if prompt != "" {
-				if prompt == "/exit" || prompt == "/quit" || prompt == "/q" {
-					return len(fullSeq), true
-				}
-				dp.History = append(dp.History, prompt)
-				dp.HistIdx = len(dp.History)
-				dp.appendMessageToLeft("user", prompt)
+			if dp.RightVT.ScrollOffset > 0 {
+				dp.RightVT.SnapToBottom()
 				dp.Render()
-				go dp.executeChatQuery(prompt)
 			}
-			return len(fullSeq), false
-		}
-		if len(rest) >= 2 && rest[0] == '[' {
-			switch rest[1] {
-			case 'A': // Up arrow: previous prompt history
-				if len(dp.History) > 0 {
-					if dp.HistIdx > 0 {
-						dp.HistIdx--
-						dp.InputBuffer = []rune(dp.History[dp.HistIdx])
-						dp.CursorPos = len(dp.InputBuffer)
-						dp.Render()
-					}
-				}
-				return 3, false
-			case 'B': // Down arrow: next prompt history
-				if len(dp.History) > 0 {
-					if dp.HistIdx < len(dp.History)-1 {
-						dp.HistIdx++
-						dp.InputBuffer = []rune(dp.History[dp.HistIdx])
-						dp.CursorPos = len(dp.InputBuffer)
-						dp.Render()
-					} else {
-						dp.HistIdx = len(dp.History)
-						dp.InputBuffer = []rune{}
-						dp.CursorPos = 0
-						dp.Render()
-					}
-				}
-				return 3, false
-			case 'C': // Right arrow
-				if dp.CursorPos < len(dp.InputBuffer) {
-					dp.CursorPos++
-					dp.Render()
-				}
-				return 3, false
-			case 'D': // Left arrow
-				if dp.CursorPos > 0 {
-					dp.CursorPos--
-					dp.Render()
-				}
-				return 3, false
-			case '5': // PgUp: scroll conversation history up
-				if len(rest) >= 3 && rest[2] == '~' {
-					dp.LeftScroll -= 5
-					if dp.LeftScroll < 0 {
-						dp.LeftScroll = 0
-					}
-					dp.Render()
-					return 4, false
-				}
-			case '6': // PgDn: scroll conversation history down
-				if len(rest) >= 3 && rest[2] == '~' {
-					contentHeight := dp.Height - 3
-					historyHeight := contentHeight - 2
-					maxScroll := len(dp.LeftLines) - historyHeight
-					if maxScroll < 0 {
-						maxScroll = 0
-					}
-					dp.LeftScroll += 5
-					if dp.LeftScroll > maxScroll {
-						dp.LeftScroll = maxScroll
-					}
-					dp.Render()
-					return 4, false
-				}
-			case 'H': // Home
-				dp.CursorPos = 0
-				dp.Render()
-				return 3, false
-			case 'F': // End
-				dp.CursorPos = len(dp.InputBuffer)
-				dp.Render()
-				return 3, false
-			case '3': // Delete
-				if len(rest) >= 3 && rest[2] == '~' {
-					if dp.CursorPos < len(dp.InputBuffer) {
-						dp.InputBuffer = append(dp.InputBuffer[:dp.CursorPos], dp.InputBuffer[dp.CursorPos+1:]...)
-						dp.Render()
-					}
-					return 4, false
-				}
-			}
-		}
-		return 1, false
-	}
-
-	// Printable UTF-8 characters
-	all := append([]byte{b}, rest...)
-	r, size := utf8.DecodeRune(all)
-	if r != utf8.RuneError || size > 1 {
-		dp.InputBuffer = append(dp.InputBuffer[:dp.CursorPos], append([]rune{r}, dp.InputBuffer[dp.CursorPos:]...)...)
-		dp.CursorPos++
-		dp.Render()
-		return size, false
-	}
-
-	return 1, false
-}
-
-func (dp *DualPaneWorkspace) executeChatQuery(prompt string) {
-	dp.mu.Lock()
-	dp.IsStreaming = true
-
-	var apiMessages []Message
-	activePrompt := systemPrompt
-	if dp.Opts.IsCodeGen {
-		activePrompt = codePrompt
-	}
-	apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
-
-	if len(dp.Session.Messages) > 0 {
-		compacted := compactHistory(dp.Session.Messages)
-		apiMessages = append(apiMessages, compacted...)
-	}
-	apiMessages = append(apiMessages, Message{Role: "user", Content: prompt})
-
-	queryCtx, cancel := context.WithCancel(context.Background())
-	dp.ActiveCancel = cancel
-
-	leftWidth := int(float64(dp.Width) * 0.40)
-	contentWidth := leftWidth - 2
-	if contentWidth < 4 {
-		contentWidth = 4
-	}
-
-	// Header for assistant response
-	header := fmt.Sprintf("─── ask [%s] ───", dp.Config.Model)
-	if len(header) > contentWidth {
-		header = header[:contentWidth]
-	}
-	dp.LeftLines = append(dp.LeftLines, header)
-	assistantLineStart := len(dp.LeftLines)
-	dp.LeftLines = append(dp.LeftLines, "") // placeholder for response
-
-	var accumulated strings.Builder
-	dp.mu.Unlock()
-
-	streamOpts := dp.Opts
-	streamOpts.OnToken = func(tok string) {
-		dp.mu.Lock()
-		defer dp.mu.Unlock()
-
-		accumulated.WriteString(tok)
-		wrapped := wrapText(accumulated.String(), contentWidth)
-
-		// Replace assistant lines
-		newLeft := append([]string{}, dp.LeftLines[:assistantLineStart]...)
-		newLeft = append(newLeft, wrapped...)
-		dp.LeftLines = newLeft
-
-		// Auto-scroll to keep latest tokens in view
-		historyHeight := (dp.Height - 3) - 2
-		if historyHeight < 1 {
-			historyHeight = 1
-		}
-		if len(dp.LeftLines) > historyHeight {
-			dp.LeftScroll = len(dp.LeftLines) - historyHeight
+			_, _ = dp.RightPTY.Write([]byte{b})
 		}
 
-		dp.Render()
+		i++
 	}
 
-	response, queryErr := queryOpenRouter(queryCtx, dp.Config, apiMessages, streamOpts)
-
-	dp.mu.Lock()
-	dp.IsStreaming = false
-	dp.ActiveCancel = nil
-	if response != "" {
-		dp.Session.Messages = append(dp.Session.Messages,
-			Message{Role: "user", Content: prompt},
-			Message{Role: "assistant", Content: response},
-		)
-		_ = saveSession(dp.Session)
-		dp.LeftLines = append(dp.LeftLines, "") // blank line after assistant turn
-	} else if queryErr != nil && queryErr != context.Canceled {
-		dp.LeftLines = append(dp.LeftLines, fmt.Sprintf("[Error: %v]", queryErr), "")
-	}
-	dp.mu.Unlock()
-
-	dp.Render()
+	return false
 }
 
 func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) error {
@@ -612,23 +362,14 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 		return fmt.Errorf("failed to initialize raw terminal: %w", err)
 	}
 
-	// Enter alternate screen buffer
-	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + ansiEnablePaste)
+	// Enter alternate screen buffer & enable mouse reporting
+	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h")
 	_ = os.Stdout.Sync()
 
-	sessionID := getSessionID()
-	session, err := loadSession(sessionID)
-	if err != nil {
-		session = &Session{
-			ID:       sessionID,
-			Messages: []Message{},
-		}
-	}
-
-	dp, err := NewDualPaneWorkspace(cfg, session, opts, initialPrompt)
+	dp, err := NewDualPaneWorkspace(initialPrompt)
 	if err != nil {
 		_ = restoreTerm(fd, state)
-		_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen + ansiShowCursor)
+		_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
 		_ = os.Stdout.Sync()
 		return err
 	}
@@ -638,16 +379,16 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 		cleanupOnce.Do(func() {
 			dp.mu.Lock()
 			dp.IsExiting = true
-			if dp.ActiveCancel != nil {
-				dp.ActiveCancel()
-			}
 			dp.mu.Unlock()
 
-			if dp.PTY != nil {
-				_ = dp.PTY.Close()
+			if dp.LeftPTY != nil {
+				_ = dp.LeftPTY.Close()
+			}
+			if dp.RightPTY != nil {
+				_ = dp.RightPTY.Close()
 			}
 			_ = restoreTerm(fd, state)
-			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen + ansiShowCursor)
+			_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
 			_ = os.Stdout.Sync()
 		})
 	}
@@ -656,27 +397,41 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 	// Initial render
 	dp.Render()
 
-	// Background reader for PTY shell output
-	shellDone := make(chan struct{})
+	// Background reader for Left PTY (ask -i)
+	leftDone := make(chan struct{})
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := dp.PTY.Read(buf)
+			n, err := dp.LeftPTY.Read(buf)
 			if n > 0 {
-				dp.VTGrid.Write(buf[:n])
+				dp.LeftVT.Write(buf[:n])
 				dp.Render()
 			}
 			if err != nil {
-				if err != io.EOF && !dp.IsExiting {
-					// Shell closed or exited
-				}
 				break
 			}
 		}
-		close(shellDone)
+		close(leftDone)
 	}()
 
-	// Terminal resize watcher (checks size periodically or upon input)
+	// Background reader for Right PTY (Shell)
+	rightDone := make(chan struct{})
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := dp.RightPTY.Read(buf)
+			if n > 0 {
+				dp.RightVT.Write(buf[:n])
+				dp.Render()
+			}
+			if err != nil {
+				break
+			}
+		}
+		close(rightDone)
+	}()
+
+	// Terminal resize watcher
 	resizeTicker := time.NewTicker(250 * time.Millisecond)
 	defer resizeTicker.Stop()
 
@@ -692,12 +447,14 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 				dp.Height = h
 				leftWidth := int(float64(w) * 0.40)
 				rightWidth := w - leftWidth - 1
-				contentHeight := h - 3
+				contentHeight := h - 2
 				if contentHeight < 4 {
 					contentHeight = 4
 				}
-				dp.VTGrid.Resize(contentHeight, rightWidth)
-				_ = dp.PTY.Resize(contentHeight, rightWidth)
+				dp.LeftVT.Resize(contentHeight, leftWidth)
+				dp.RightVT.Resize(contentHeight, rightWidth)
+				_ = dp.LeftPTY.Resize(contentHeight, leftWidth)
+				_ = dp.RightPTY.Resize(contentHeight, rightWidth)
 				dp.mu.Unlock()
 				dp.Render()
 			}
@@ -727,8 +484,11 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 
 	for {
 		select {
-		case <-shellDone:
-			// Shell exited (e.g. user typed `exit` in shell) -> cleanly close workspace immediately!
+		case <-leftDone:
+			// ask -i exited (e.g. /exit) -> cleanly close workspace!
+			return nil
+		case <-rightDone:
+			// Shell exited (e.g. user typed 'exit' in terminal) -> cleanly close workspace!
 			return nil
 		case <-sigChan:
 			return nil
@@ -736,14 +496,8 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 			if !ok {
 				return nil
 			}
-			i := 0
-			n := len(inBuf)
-			for i < n {
-				consumed, shouldExit := dp.handleInputByte(inBuf[i], inBuf[i+1:n])
-				if shouldExit {
-					return nil
-				}
-				i += consumed
+			if shouldExit := dp.handleInput(inBuf); shouldExit {
+				return nil
 			}
 		}
 	}

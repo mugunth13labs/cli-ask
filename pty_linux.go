@@ -15,8 +15,6 @@ type LinuxPTY struct {
 	cmd    *exec.Cmd
 }
 
-	// winsize is declared in term_unix.go
-
 const (
 	ioctlTIOCGPTN   = 0x80045430 // ioctl to get pts number
 	ioctlTIOCSPTLCK = 0x40045431 // ioctl to unlock slave pts
@@ -24,6 +22,17 @@ const (
 )
 
 func StartPTY(rows, cols int) (PTYSession, error) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+		if _, err := os.Stat(shell); err != nil {
+			shell = "/bin/sh"
+		}
+	}
+	return StartPTYCommand(rows, cols, shell)
+}
+
+func StartPTYCommand(rows, cols int, command string, args ...string) (PTYSession, error) {
 	// 1. Open master /dev/ptmx
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
@@ -57,16 +66,8 @@ func StartPTY(rows, cols int) (PTYSession, error) {
 	ws := winsize{Row: uint16(rows), Col: uint16(cols)}
 	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), uintptr(ioctlTIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
 
-	// 6. Identify shell
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
-		if _, err := os.Stat(shell); err != nil {
-			shell = "/bin/sh"
-		}
-	}
-
-	cmd := exec.Command(shell)
+	// 6. Launch process
+	cmd := exec.Command(command, args...)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
@@ -83,7 +84,7 @@ func StartPTY(rows, cols int) (PTYSession, error) {
 
 	if err := cmd.Start(); err != nil {
 		master.Close()
-		return nil, fmt.Errorf("start shell %s: %w", shell, err)
+		return nil, fmt.Errorf("start %s: %w", command, err)
 	}
 
 	return &LinuxPTY{
