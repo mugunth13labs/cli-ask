@@ -1,9 +1,12 @@
-.TH ASK 1 "October 2026" "cli-ask 0.3.1" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.2" "User Commands"
 .SH NAME
-ask \- non-intrusive terminal AI assistant with session-scoped context
+ask \- non-intrusive terminal AI assistant with session-scoped context and chatbot mode
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
+.br
+.B ask
+\fB--chatbot\fR | \fB-i\fR [\fIPROMPT\fR]
 .br
 .B ask
 [\fI--no-context\fR]
@@ -19,13 +22,20 @@ ask \- non-intrusive terminal AI assistant with session-scoped context
 .B ask
 is a lightweight, zero-dependency command-line utility designed for system administrators, DevOps engineers, and terminal users who want immediate, fluff-free AI answers without disrupting their shell workflow.
 .PP
-Unlike interactive TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately.
+Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in terminal-native plain text with ASCII underlines and clean indentation, avoiding unrendered web markdown.
+.PP
+When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous REPL session, allowing natural conversational back-and-forth prompting within the terminal without exiting after each turn.
 .PP
 When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode, accepting literal text, code snippets, or command chains until terminated by standard OS EOF (\fBCtrl+D\fR on Linux/macOS, \fBCtrl+Z\fR then Enter on Windows).
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
+.PP
+When outputting to an interactive terminal, a subtle horizontal splitter line separates user queries from AI responses. On non-terminal stdout or redirection pipelines, status indicators and dividers are automatically suppressed to preserve clean data streaming.
 
 .SH OPTIONS
+.TP
+.BR \-i ", " \-\-chatbot " [" \fIPROMPT\fR "]"
+Start a continuous interactive chat session (REPL). If an initial prompt is provided, it is submitted upon launch.
 .TP
 .BR \-c ", " \-\-clear
 Clear the conversation history for the current terminal session.
@@ -54,6 +64,21 @@ Print program version and exit.
 .BR \-h ", " \-\-help
 Print usage help and exit.
 
+.SH CHATBOT COMMANDS
+Within interactive chatbot mode (\fBask -i\fR), the following commands are available at the \fB>>>\fR prompt:
+.TP
+.BR /clear ", " /c
+Clear conversation memory for the current session.
+.TP
+.BR /model " [" \fIMODEL\fR "]"
+Switch the active model for the chat session, or display current model if no argument is given.
+.TP
+.B /help
+Display available chatbot commands.
+.TP
+.BR exit ", " quit ", " /q
+Exit chat mode.
+
 .SH ENVIRONMENT
 .TP
 .B OPENROUTER_API_KEY
@@ -71,6 +96,12 @@ Session-scoped conversation history for the active terminal shell.
 .TP
 .B Quick command lookup:
 ask "how to find listening ports in linux"
+.TP
+.B Continuous chatbot session:
+ask -i
+.TP
+.B Chatbot with initial question:
+ask -i "explain how systemd cgroups work"
 .TP
 .B Passing literal command arguments:
 ask ps -eo pid,cmd --sort
