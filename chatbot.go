@@ -119,11 +119,6 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 	if opts.IsStdoutTerminal {
 		fmt.Printf("ask v%s — Continuous Chat Mode\n", version)
 		fmt.Printf("Model: %s | Session: %s\n", cfg.Model, sessionID)
-		if opts.OutputFile != "" {
-			fmt.Printf("Saving chat to: %s\n", opts.OutputFile)
-		} else if opts.AppendFile != "" {
-			fmt.Printf("Appending chat to: %s\n", opts.AppendFile)
-		}
 		fmt.Println("Send: Ctrl+Enter | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
 		fmt.Println()
 	}
@@ -153,13 +148,6 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// In chatbot mode, if writing to file, subsequent turns should append
-	chatQueryOpts := opts
-	if chatQueryOpts.OutputFile != "" {
-		chatQueryOpts.AppendFile = chatQueryOpts.OutputFile
-		chatQueryOpts.OutputFile = ""
-	}
-
 	executeQuery := func(prompt string) {
 		prompt = strings.TrimSpace(prompt)
 		if prompt == "" {
@@ -168,7 +156,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 
 		var apiMessages []Message
 		activePrompt := systemPrompt
-		if chatQueryOpts.IsCodeGen {
+		if opts.IsCodeGen {
 			activePrompt = codePrompt
 		}
 		apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
@@ -184,7 +172,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		activeCancel = cancel
 		mu.Unlock()
 
-		response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, chatQueryOpts)
+		response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, opts)
 
 		mu.Lock()
 		activeCancel = nil

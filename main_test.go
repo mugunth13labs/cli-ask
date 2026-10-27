@@ -482,3 +482,54 @@ func TestStrictSlashCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCLIArgsSplit(t *testing.T) {
+	p1 := parseCLIArgs([]string{"-s"})
+	if p1.Action != "chatbot" || !p1.Split {
+		t.Errorf("expected chatbot with Split=true for -s, got action=%q, split=%v", p1.Action, p1.Split)
+	}
+
+	p2 := parseCLIArgs([]string{"--split"})
+	if p2.Action != "chatbot" || !p2.Split {
+		t.Errorf("expected chatbot with Split=true for --split, got action=%q, split=%v", p2.Action, p2.Split)
+	}
+
+	p3 := parseCLIArgs([]string{"-s", "explain", "cgroups"})
+	if p3.Action != "chatbot" || !p3.Split {
+		t.Errorf("expected chatbot with Split=true for -s prompt")
+	}
+	if p3.Prompt != "explain cgroups" {
+		t.Errorf("expected prompt 'explain cgroups', got %q", p3.Prompt)
+	}
+
+	p4 := parseCLIArgs([]string{"-i", "--split"})
+	if p4.Action != "chatbot" || !p4.Split {
+		t.Errorf("expected chatbot with Split=true for -i --split")
+	}
+}
+
+func TestIncompatibleChatbotFileOutput(t *testing.T) {
+	// ask -i -o main.c -> error
+	p1 := parseCLIArgs([]string{"-i", "-o", "main.c"})
+	if err := validateArgs(&p1); err == nil {
+		t.Errorf("expected validation error for -i -o")
+	}
+
+	// ask -i -a main.c -> error
+	p2 := parseCLIArgs([]string{"-i", "-a", "main.c"})
+	if err := validateArgs(&p2); err == nil {
+		t.Errorf("expected validation error for -i -a")
+	}
+
+	// ask --chatbot --output out.txt -> error
+	p3 := parseCLIArgs([]string{"--chatbot", "--output", "out.txt"})
+	if err := validateArgs(&p3); err == nil {
+		t.Errorf("expected validation error for --chatbot --output")
+	}
+
+	// ask -o main.c "write hello world" -> VALID (standalone query, not chatbot)
+	p4 := parseCLIArgs([]string{"-o", "main.c", "write hello world"})
+	if err := validateArgs(&p4); err != nil {
+		t.Errorf("expected valid query with -o, got error: %v", err)
+	}
+}

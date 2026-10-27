@@ -29,6 +29,7 @@ type ParsedArgs struct {
 	OutputFile string // path for -o / --output
 	AppendFile string // path for -a / --append
 	CodeGen    bool   // pure code generation mode (--cg / --codegen)
+	Split      bool   // split screen mode (-s / --split)
 	Prompt     string // collected prompt tokens
 	UseContext bool   // true unless --no-context is provided
 }
@@ -63,6 +64,10 @@ func parseCLIArgs(args []string) ParsedArgs {
 			return result
 		case "-i", "--chatbot":
 			result.Action = "chatbot"
+			return result
+		case "-s", "--split":
+			result.Action = "chatbot"
+			result.Split = true
 			return result
 		}
 	}
@@ -107,6 +112,13 @@ func parseCLIArgs(args []string) ParsedArgs {
 				result.Action = "chatbot"
 				continue
 			}
+			if arg == "-s" || arg == "--split" {
+				result.Split = true
+				if result.Action == "query" {
+					result.Action = "chatbot"
+				}
+				continue
+			}
 			if arg == "--no-context" {
 				result.UseContext = false
 				continue
@@ -139,6 +151,13 @@ func parseCLIArgs(args []string) ParsedArgs {
 
 	result.Prompt = strings.Join(promptTokens, " ")
 	return result
+}
+
+func validateArgs(parsed *ParsedArgs) error {
+	if parsed.Action == "chatbot" && (parsed.OutputFile != "" || parsed.AppendFile != "") {
+		return fmt.Errorf("interactive chatbot mode (-i/--chatbot) is incompatible with direct file output (-o/--output, -a/--append)")
+	}
+	return nil
 }
 
 func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool {
@@ -234,6 +253,7 @@ Usage:
   ask                           Interactive composer page (Ctrl+Enter to submit)
   ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
   ask --chatbot, -i             Start immersive continuous interactive chat session
+  ask --split, -s [<prompt>]    Start side-by-side terminal split (chat on left, shell on right)
   echo "code" | ask "explain"   Pipe stdin to ask
   ask -- <prompt>               Treat everything after -- as literal prompt
 
@@ -248,6 +268,7 @@ Code Generation:
 Chatbot Mode:
   ask --chatbot, -i             Immersive multi-turn chat session in alternate screen
   ask -i <prompt>               Start chat mode with an initial prompt
+  ask --split, -s [<prompt>]    Side-by-side terminal split (chat on left, shell on right)
 
 Session Memory:
   ask --clear, -c               Clear current terminal's conversation history
@@ -268,6 +289,11 @@ Environment:
 
 func main() {
 	parsed := parseCLIArgs(os.Args[1:])
+
+	if err := validateArgs(&parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	switch parsed.Action {
 	case "help":
@@ -365,8 +391,17 @@ func main() {
 		IsStderrTerminal: isStderrTerminal,
 	}
 
-	// BUG 1 FIX: Dispatch chatbot immediately before reading stdin prompts
+	// Dispatch chatbot immediately before reading stdin prompts
 	if parsed.Action == "chatbot" {
+		if parsed.Split {
+			handled, err := tryLaunchSplitSession(&parsed)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Split mode error: %v\n", err)
+			}
+			if handled {
+				return
+			}
+		}
 		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
 			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
 			os.Exit(1)
