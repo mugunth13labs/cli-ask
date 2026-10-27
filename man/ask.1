@@ -35,7 +35,7 @@ Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: 
 .PP
 When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens a temporary composer in the Alternate Screen Buffer (similar to \fBman\fR or \fBless\fR). Inside the composer, you can freely paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without accidental execution. Upon pressing \fBCtrl+Enter\fR, the composer exits, restores your main terminal cleanly, and streams the AI response to stdout.
 .PP
-When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an immersive continuous chat session in the Alternate Screen Buffer. It supports multi-turn memory, in-chat commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fBexit\fR, \fB/q\fR), and cleanly restores your shell without polluting terminal history upon exiting.
+When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an immersive continuous chat session in the Alternate Screen Buffer. It supports multi-turn memory, in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR), and cleanly restores your shell without polluting terminal history upon exiting. Words without a leading slash are treated strictly as literal prompt text.
 .PP
 When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.pbs\fR, etc.) or modifying scripts via pipes, \fBask\fR automatically activates pure code generation mode. In this mode, conversational fluff, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
 .PP
@@ -94,8 +94,8 @@ Switch the active model for the chat session, or display current model if no arg
 .B /help
 Display available chatbot commands.
 .TP
-.BR exit ", " quit ", " /q ", " /exit ", " /quit
-Exit chat mode and restore main terminal screen.
+.BR /exit ", " /quit ", " /q
+Exit chat mode and restore main terminal screen. Note: Words without a leading slash (e.g. \fBexit\fR, \fBquit\fR, \fBclear\fR) are treated as literal prompt text to allow discussing or debugging shell scripts without prematurely terminating the session.
 
 .SH ENVIRONMENT
 .TP
@@ -112,23 +112,32 @@ Session-scoped conversation history for the active terminal shell.
 
 .SH EXAMPLES
 .TP
-.B Launch multiline composer in alternate screen:
-ask
-.TP
-.B Immersive continuous chatbot:
-ask -i
-.TP
-.B Generate pure PBS script without alien titles:
-ask -o job.pbs "generate a pbs script template"
-.TP
-.B Filter and refactor a script via pipe:
-cat test.pbs | ask "remove alien lines and request 2 nodes" > test2.pbs
-.TP
 .B Quick command lookup:
 ask "how to find listening ports in linux"
+.TP
+.B Code generation mode:
+ask --cg "write a python function to compute sha256"
+.TP
+.B Direct file output:
+ask -o deploy.sh "write a shell script to deploy container"
+.TP
+.B Follow-up in same terminal:
+ask "filter only tcp ones"
+.TP
+.B Standard input piping:
+git diff | ask "summarize these changes"
+.TP
+.B Interactive multiline composer:
+ask
+.TP
+.B Continuous chatbot mode:
+ask -i
+.TP
+.B Clear active session:
+ask --clear
 
 .SH AUTHOR
-Maintained by Mugunthan <https://github.com/mugunth13labs>.
+Maintained by mugunth13labs <https://github.com/mugunth13labs/cli-ask>.
 .SH "REPORTING BUGS"
 Report bugs to <https://github.com/mugunth13labs/cli-ask/issues>.
 .SH COPYRIGHT

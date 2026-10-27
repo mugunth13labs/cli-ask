@@ -25,7 +25,7 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 `ask` is built on a different principle: **The Unix Philosophy.**
 
 - **A Filter, Not a Framework**: `ask` behaves like `grep`, `awk`, or `curl`. You run a command, it streams the concise answer straight to standard output, and exits immediately. Your prompt is ready for the next task.
-- **Isolated Alternate Screen Composer**: Running `ask` with no prompt opens a temporary composer in the Alternate Screen Buffer (like `man` or `less`). You can edit, navigate with arrows, and backspace across lines. Submitting exits the alternate screen, restores your shell, and prints the AI response cleanly to stdout.
+- **Isolated Alternate Screen Composer**: Running `ask` with no prompt opens a temporary composer in the Alternate Screen Buffer (like `man` or `less`). You can edit freely, navigate with arrow keys, and backspace across lines. Submitting exits the alternate screen, restores your shell, and prints the AI response cleanly to stdout.
 - **Pure Code When You Need Code**: Generates raw, syntactically valid code starting directly with shebangs or declarations—zero conversational preambles, zero markdown code fences, and zero alien ASCII title banners breaking your scripts.
 - **Session-Scoped by Design**: Memory is strictly scoped to the parent shell process (PPID). Two terminal tabs or tmux panes on the same machine never contaminate each other's context. Your Kubernetes debugging in Tab 1 never bleeds into your Terraform work in Tab 2.
 - **Auto-Compacting, Not Discarding**: Rather than dropping context abruptly with an arbitrary timer, long multi-turn sessions automatically roll into concise summaries behind the scenes. Zero latency overhead, zero token window blowouts.
@@ -39,9 +39,11 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 
 - ⚡ **Instant Execution**: Native standalone binary. Starts immediately with near-zero latency.
 - 📝 **Alternate Screen Micro-Editor**: Isolated prompt composer with full arrow-key navigation, cross-line Backspace, and bracketed paste safety.
+- ⌨️ **Strict `Ctrl+Enter` Submission**: Only `Ctrl+Enter` submits your prompt. Accidental `Ctrl+D`, `Ctrl+Z`, or blank lines will never prematurely fire off queries while typing or pasting.
+- 🛡️ **Slash-Command Isolation**: Words without a leading slash (like `exit`, `quit`, `clear`) are treated 100% literally, allowing you to ask questions about shell scripts or commands containing `exit` without terminating your session. Only explicit commands (`/exit`, `/quit`, `/q`, `/clear`, `/c`, `/model`, `/help`) trigger actions.
 - 💻 **Pure Code Generation (`--cg`, `--codegen`)**: Output exact, runnable code or scripts without title headers or markdown fences.
 - 🤖 **Smart Codegen Auto-Detection**: Automatically activates codegen mode when saving to script/code files (`.sh`, `.py`, `.pbs`, `.yaml`, etc.) or piping existing scripts.
-- 💬 **Immersive Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction in the Alternate Screen Buffer.
+- 💬 **Immersive Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction with full multi-line editing in each turn.
 - 📁 **Direct File Output**: Save responses directly using `ask -o <file>` (overwrite) or `ask -a <file>` (append).
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
 - 🌊 **Token Streaming**: Real-time token streaming straight to stdout or files.
@@ -106,12 +108,13 @@ Simply run `ask` with no prompt arguments to open the micro-editor in a temporar
 $ ask
 ```
 Inside the composer:
-- **Full Navigation**: Use Arrow Keys ($\uparrow, \downarrow, \leftarrow, \rightarrow$) to move around.
+- **Full Navigation**: Use Arrow Keys ($\uparrow, \downarrow, \leftarrow, \rightarrow$, Home, End) to move around freely across lines and columns.
 - **Cross-Line Backspace**: Pressing Backspace on column 0 pulls the line up and merges it into the line above.
-- **Paste Safe**: Paste multi-paragraph text or code with blank lines safely (Bracketed Paste Mode).
-- **Literal Characters**: Characters like `;`, `>`, `|`, `&`, `$`, `"`, `(`, `)` are treated 100% literally without shell interference.
-- **Submit**: Press `Ctrl+Enter` (or `Ctrl+D`).
-- **Cancel**: Press `Ctrl+C` or type `/q` / `/exit`.
+- **Paste Safe**: Paste multi-paragraph text or code with blank lines safely (Bracketed Paste Mode prevents premature submission).
+- **Literal Characters**: Characters like `;`, `>`, `|`, `&`, `$`, `"`, `(`, `)` are treated 100% literally without shell escaping needed.
+- **Strict Submission (`Ctrl+Enter`)**: Press `Ctrl+Enter` to send your prompt. `Ctrl+D` and `Ctrl+Z` are strictly ignored to prevent accidental submission while typing.
+- **Cancellation**: Press `Ctrl+C` or submit `/exit`, `/quit`, `/q` to discard and exit without executing.
+- **Literal Words**: Typing words like `exit` or `quit` without a leading slash are treated as literal prompt text to send to the AI model.
 
 Upon pressing `Ctrl+Enter`, the composer exits immediately, cleanly restores your terminal screen, and streams the AI answer to `stdout`!
 
@@ -138,7 +141,7 @@ When you want an uninterrupted back-and-forth dialogue without exiting to the sh
 $ ask -i
 ask v0.3.5 — Continuous Chat Mode
 Model: nvidia/nemotron-3.5-lightning:free | Session: session-12345
-Send: Ctrl+Enter (or Ctrl+D) | Newline: Enter | Exit: exit, /q | Cancel: Ctrl+C
+Send: Ctrl+Enter | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C
 
 >>> how do I inspect docker container network interfaces?
 ─── ask [nvidia/nemotron-3.5-lightning:free] ───────────────────────────
@@ -152,15 +155,17 @@ Run:
 
   docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container_id>
 
->>> exit
+>>> /exit
 ```
 Inside chatbot mode:
-- `Enter`: Inserts a newline so you can type paragraphs and code freely.
-- `Ctrl+Enter` or `Ctrl+D`: Submits your prompt to the AI.
-- `/clear` or `/c`: Reset conversation history for the session.
-- `/model <name>`: Switch active model on the fly.
-- `/help`: Display in-chat help.
-- `exit`, `quit`, `/q`, `/exit`, or `Ctrl+C`: Exit chatbot mode and restore main terminal screen cleanly.
+- **`Enter`**: Inserts a newline so you can type paragraphs, shell commands, and code blocks freely.
+- **`Ctrl+Enter`**: Strictly submits your multiline prompt to the AI.
+- **Arrow Keys & Backspace**: Full cursor movement ($\uparrow, \downarrow, \leftarrow, \rightarrow$) across lines, with cross-line backspacing to edit earlier lines.
+- **`/clear` or `/c`**: Reset conversation history for the session.
+- **`/model <name>`**: Switch active model on the fly.
+- **`/help`**: Display in-chat help.
+- **`/exit`, `/quit`, `/q`, or `Ctrl+C`**: Exit chatbot mode and restore the main terminal screen cleanly.
+- **Literal Commands**: Typing `exit` or `quit` (without a slash `/`) sends "exit" as literal text to the model, allowing you to ask questions about exit codes (`exit 1`) without quitting chat mode.
 
 ### 5. Direct File Output (`-o`, `-a`)
 Save answers directly to files without worrying about shell pipe syntax:
