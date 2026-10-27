@@ -29,7 +29,7 @@ func StartPTY(rows, cols int) (PTYSession, error) {
 			shell = "/bin/sh"
 		}
 	}
-	return StartPTYCommand(rows, cols, shell)
+	return StartPTYCommand(rows, cols, shell, "-i")
 }
 
 func StartPTYCommand(rows, cols int, command string, args ...string) (PTYSession, error) {

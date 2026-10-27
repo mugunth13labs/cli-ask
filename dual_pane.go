@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -119,7 +119,7 @@ func (dp *DualPaneWorkspace) Render() {
 		rightPill = "\x1b[7m\x1b[1m [ 2: Terminal ] \x1b[0m"
 	}
 
-	hint := "Ctrl+T: Switch | PgUp/Dn: Scroll | Shift+Arrows: Select | Ctrl+C: Copy "
+	hint := "Ctrl+T: Switch | PgUp/Dn: Scroll | Mouse: Native Select/Copy "
 	tabsLine := leftPill + " │ " + rightPill
 	visibleTabLen := 24 + 3 + 19
 	remaining := w - visibleTabLen - len(hint)
@@ -158,20 +158,12 @@ func (dp *DualPaneWorkspace) Render() {
 	if dp.ActivePane == PaneLeft {
 		cursorRow := dp.LeftVT.CursorRow
 		cursorCol := dp.LeftVT.CursorCol
-		if dp.LeftVT.IsNavMode {
-			cursorRow = dp.LeftVT.NavRow
-			cursorCol = dp.LeftVT.NavCol
-		}
 		targetRow := 3 + cursorRow
 		targetCol := 1 + cursorCol
 		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", targetRow, targetCol, ansiShowCursor))
 	} else {
 		cursorRow := dp.RightVT.CursorRow
 		cursorCol := dp.RightVT.CursorCol
-		if dp.RightVT.IsNavMode {
-			cursorRow = dp.RightVT.NavRow
-			cursorCol = dp.RightVT.NavCol
-		}
 		targetRow := 3 + cursorRow
 		targetCol := leftWidth + 2 + cursorCol
 		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", targetRow, targetCol, ansiShowCursor))
@@ -182,174 +174,65 @@ func (dp *DualPaneWorkspace) Render() {
 }
 
 func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
-	i := 0
-	n := len(inBuf)
-
-	for i < n {
-		b := inBuf[i]
-
-		// 1. Universal Pane Toggle: Ctrl+T (0x14)
-		if b == 0x14 {
-			dp.mu.Lock()
-			if dp.ActivePane == PaneLeft {
-				dp.ActivePane = PaneRight
-			} else {
-				dp.ActivePane = PaneLeft
-			}
-			dp.mu.Unlock()
-			dp.Render()
-			i++
-			continue
-		}
-
-		// 2. Check for Escape sequences: Arrows, Shift+Arrows, PgUp/PgDn, Mouse
-		if b == 0x1b && i+1 < n {
-			rest := inBuf[i+1:]
-
-			// Mouse reporting sequence: \x1b[<64;X;YM or \x1b[<65;X;YM
-			if len(rest) >= 5 && rest[0] == '[' && rest[1] == '<' {
-				endIdx := 2
-				for endIdx < len(rest) && (rest[endIdx] == ';' || (rest[endIdx] >= '0' && rest[endIdx] <= '9')) {
-					endIdx++
-				}
-				if endIdx < len(rest) && (rest[endIdx] == 'M' || rest[endIdx] == 'm') {
-					parts := strings.Split(string(rest[2:endIdx]), ";")
-					if len(parts) == 3 {
-						btn, _ := strconv.Atoi(parts[0])
-						x, _ := strconv.Atoi(parts[1])
-						leftWidth := int(float64(dp.Width) * 0.40)
-
-						// 64 = Wheel Up, 65 = Wheel Down
-						if btn == 64 {
-							if x <= leftWidth {
-								dp.LeftVT.ScrollPageUp(3)
-							} else {
-								dp.RightVT.ScrollPageUp(3)
-							}
-							dp.Render()
-						} else if btn == 65 {
-							if x <= leftWidth {
-								dp.LeftVT.ScrollPageDown(3)
-							} else {
-								dp.RightVT.ScrollPageDown(3)
-							}
-							dp.Render()
-						}
-					}
-					i += 2 + endIdx
-					continue
-				}
-			}
-
-			// PgUp: \x1b[5~
-			if len(rest) >= 3 && rest[0] == '[' && rest[1] == '5' && rest[2] == '~' {
-				if dp.ActivePane == PaneLeft {
-					dp.LeftVT.ScrollPageUp(5)
-				} else {
-					dp.RightVT.ScrollPageUp(5)
-				}
-				dp.Render()
-				i += 4
-				continue
-			}
-
-			// PgDn: \x1b[6~
-			if len(rest) >= 3 && rest[0] == '[' && rest[1] == '6' && rest[2] == '~' {
-				if dp.ActivePane == PaneLeft {
-					dp.LeftVT.ScrollPageDown(5)
-				} else {
-					dp.RightVT.ScrollPageDown(5)
-				}
-				dp.Render()
-				i += 4
-				continue
-			}
-
-			// Shift+Arrows / Ctrl+Shift+Arrows for text selection in Left Pane
-			if dp.ActivePane == PaneLeft && len(rest) >= 5 && rest[0] == '[' && rest[1] == '1' && rest[2] == ';' {
-				mod := rest[3] // '2' = Shift, '6' = Ctrl+Shift
-				dir := rest[4] // 'A'=Up, 'B'=Down, 'C'=Right, 'D'=Left
-
-				if mod == '2' || mod == '6' {
-					dp.LeftVT.mu.Lock()
-					if !dp.LeftVT.HasSelection {
-						dp.LeftVT.HasSelection = true
-						dp.LeftVT.SelStartRow = dp.LeftVT.CursorRow
-						dp.LeftVT.SelStartCol = dp.LeftVT.CursorCol
-						dp.LeftVT.NavRow = dp.LeftVT.CursorRow
-						dp.LeftVT.NavCol = dp.LeftVT.CursorCol
-						dp.LeftVT.IsNavMode = true
-					}
-
-					step := 1
-					if mod == '6' {
-						step = 5 // word jump
-					}
-
-					switch dir {
-					case 'A': // Up
-						dp.LeftVT.NavRow -= step
-						if dp.LeftVT.NavRow < 0 {
-							dp.LeftVT.NavRow = 0
-						}
-					case 'B': // Down
-						dp.LeftVT.NavRow += step
-						if dp.LeftVT.NavRow >= dp.LeftVT.Rows {
-							dp.LeftVT.NavRow = dp.LeftVT.Rows - 1
-						}
-					case 'C': // Right
-						dp.LeftVT.NavCol += step
-						if dp.LeftVT.NavCol >= dp.LeftVT.Cols {
-							dp.LeftVT.NavCol = dp.LeftVT.Cols - 1
-						}
-					case 'D': // Left
-						dp.LeftVT.NavCol -= step
-						if dp.LeftVT.NavCol < 0 {
-							dp.LeftVT.NavCol = 0
-						}
-					}
-					dp.LeftVT.SelEndRow = dp.LeftVT.NavRow
-					dp.LeftVT.SelEndCol = dp.LeftVT.NavCol
-					dp.LeftVT.mu.Unlock()
-
-					dp.Render()
-					i += 6
-					continue
-				}
-			}
-		}
-
-		// 3. Ctrl+C Copy action if Left Pane has text selected
-		if dp.ActivePane == PaneLeft && b == 3 {
-			if dp.LeftVT.HasSelection {
-				selected := dp.LeftVT.GetSelectedText()
-				if selected != "" {
-					copyToClipboard(selected)
-				}
-				dp.LeftVT.SnapToBottom()
-				dp.Render()
-				i++
-				continue
-			}
-		}
-
-		// 4. Forward input to focused pane's PTY
+	// 1. Universal Pane Toggle: Ctrl+T (0x14)
+	if bytes.Contains(inBuf, []byte{0x14}) {
+		dp.mu.Lock()
 		if dp.ActivePane == PaneLeft {
-			// If Left Pane was scrolled or in selection mode, typing any character snaps to bottom
-			if dp.LeftVT.ScrollOffset > 0 || dp.LeftVT.IsNavMode || dp.LeftVT.HasSelection {
-				dp.LeftVT.SnapToBottom()
-				dp.Render()
-			}
-			_, _ = dp.LeftPTY.Write([]byte{b})
+			dp.ActivePane = PaneRight
 		} else {
-			if dp.RightVT.ScrollOffset > 0 {
-				dp.RightVT.SnapToBottom()
-				dp.Render()
-			}
-			_, _ = dp.RightPTY.Write([]byte{b})
+			dp.ActivePane = PaneLeft
 		}
+		dp.mu.Unlock()
+		dp.Render()
 
-		i++
+		// Filter out all 0x14 bytes
+		var filtered []byte
+		for _, b := range inBuf {
+			if b != 0x14 {
+				filtered = append(filtered, b)
+			}
+		}
+		inBuf = filtered
+		if len(inBuf) == 0 {
+			return false
+		}
+	}
+
+	// 2. Check for PgUp / PgDn scrollback
+	if bytes.Equal(inBuf, []byte("\x1b[5~")) {
+		if dp.ActivePane == PaneLeft {
+			dp.LeftVT.ScrollPageUp(5)
+		} else {
+			dp.RightVT.ScrollPageUp(5)
+		}
+		dp.Render()
+		return false
+	}
+	if bytes.Equal(inBuf, []byte("\x1b[6~")) {
+		if dp.ActivePane == PaneLeft {
+			dp.LeftVT.ScrollPageDown(5)
+		} else {
+			dp.RightVT.ScrollPageDown(5)
+		}
+		dp.Render()
+		return false
+	}
+
+	// 3. If currently scrolled up and user starts typing, snap back to bottom
+	if dp.ActivePane == PaneLeft {
+		if dp.LeftVT.ScrollOffset > 0 {
+			dp.LeftVT.SnapToBottom()
+			dp.Render()
+		}
+		// Forward atomic chunk to Left PTY (ask -i)
+		_, _ = dp.LeftPTY.Write(inBuf)
+	} else {
+		if dp.RightVT.ScrollOffset > 0 {
+			dp.RightVT.SnapToBottom()
+			dp.Render()
+		}
+		// Forward atomic chunk to Right PTY (Shell)
+		_, _ = dp.RightPTY.Write(inBuf)
 	}
 
 	return false
@@ -362,14 +245,14 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 		return fmt.Errorf("failed to initialize raw terminal: %w", err)
 	}
 
-	// Enter alternate screen buffer & enable mouse reporting
-	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h")
+	// Enter alternate screen buffer (leave mouse to native terminal selection!)
+	_, _ = os.Stdout.WriteString(ansiEnterAltScreen)
 	_ = os.Stdout.Sync()
 
 	dp, err := NewDualPaneWorkspace(initialPrompt)
 	if err != nil {
 		_ = restoreTerm(fd, state)
-		_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
+		_, _ = os.Stdout.WriteString(ansiLeaveAltScreen + ansiShowCursor)
 		_ = os.Stdout.Sync()
 		return err
 	}
@@ -388,7 +271,7 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 				_ = dp.RightPTY.Close()
 			}
 			_ = restoreTerm(fd, state)
-			_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
+			_, _ = os.Stdout.WriteString(ansiLeaveAltScreen + ansiShowCursor)
 			_ = os.Stdout.Sync()
 		})
 	}
