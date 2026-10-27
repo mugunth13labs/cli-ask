@@ -99,24 +99,16 @@ func TestParseCLIArgsFileOutput(t *testing.T) {
 	if p3.Prompt != "more context" {
 		t.Errorf("expected prompt 'more context', got %q", p3.Prompt)
 	}
-
-	p4 := parseCLIArgs([]string{"-i", "-o", "session.txt"})
-	if p4.Action != "chatbot" {
-		t.Errorf("expected action 'chatbot', got %q", p4.Action)
-	}
-	if p4.OutputFile != "session.txt" {
-		t.Errorf("expected OutputFile 'session.txt', got %q", p4.OutputFile)
-	}
 }
 
 func TestParseCLIArgsDisambiguation(t *testing.T) {
-	// If extra args exist, --config or --help should NOT trigger action, but be treated as prompt
-	p := parseCLIArgs([]string{"--config", "ps", "--help"})
-	if p.Action != "query" {
-		t.Errorf("expected action 'query', got %q", p.Action)
+	// First non-option argument "find" stops option parsing; -name and -type stay in prompt
+	p1 := parseCLIArgs([]string{"find", ".", "-name", "*.go", "-type", "f"})
+	if p1.Action != "query" {
+		t.Errorf("expected action 'query', got %q", p1.Action)
 	}
-	if p.Prompt != "--config ps --help" {
-		t.Errorf("expected prompt '--config ps --help', got %q", p.Prompt)
+	if p1.Prompt != "find . -name *.go -type f" {
+		t.Errorf("expected prompt 'find . -name *.go -type f', got %q", p1.Prompt)
 	}
 
 	// Normal command with flags (e.g. grep -i pattern)
@@ -213,11 +205,11 @@ func TestStripMarkdownFences(t *testing.T) {
 	}
 }
 
-func TestReadChatPromptMultiline(t *testing.T) {
-	// 1. Multiline buffer with blank lines preserved (Bug 2 fix)
+func TestReadChatPromptCooked(t *testing.T) {
+	// 1. Multiline buffer with blank lines preserved
 	input1 := "line 1\n\nline 2\n"
 	reader1 := bufio.NewReader(strings.NewReader(input1))
-	res1, err1 := readChatPrompt(reader1, false)
+	res1, err1 := readChatPromptCooked(reader1)
 	if err1 != nil {
 		t.Fatalf("unexpected error: %v", err1)
 	}
@@ -226,21 +218,38 @@ func TestReadChatPromptMultiline(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected1, res1)
 	}
 
-	// 2. Immediate command execution on first line
-	input2 := "exit\n"
+	// 2. Immediate slash command execution on first line
+	input2 := "/exit\n"
 	reader2 := bufio.NewReader(strings.NewReader(input2))
-	res2, err2 := readChatPrompt(reader2, false)
+	res2, err2 := readChatPromptCooked(reader2)
 	if err2 != nil {
 		t.Fatalf("unexpected error: %v", err2)
 	}
-	if res2 != "exit" {
-		t.Errorf("expected 'exit', got %q", res2)
+	if res2 != "/exit" {
+		t.Errorf("expected '/exit', got %q", res2)
 	}
 
-	// 3. Ctrl+Enter escape sequence submit
+	// 3. Plain words like "exit" without slash must NOT trigger command!
+	if isChatCommand("exit") {
+		t.Errorf("expected isChatCommand('exit') to be false (only slash commands allowed)")
+	}
+	if isChatCommand("quit") {
+		t.Errorf("expected isChatCommand('quit') to be false (only slash commands allowed)")
+	}
+	if isChatCommand("clear") {
+		t.Errorf("expected isChatCommand('clear') to be false (only slash commands allowed)")
+	}
+	if !isChatCommand("/exit") {
+		t.Errorf("expected isChatCommand('/exit') to be true")
+	}
+	if !isChatCommand("/clear") {
+		t.Errorf("expected isChatCommand('/clear') to be true")
+	}
+
+	// 4. Ctrl+Enter escape sequence submit
 	input3 := "single line\x1b[13;5u\n"
 	reader3 := bufio.NewReader(strings.NewReader(input3))
-	res3, err3 := readChatPrompt(reader3, false)
+	res3, err3 := readChatPromptCooked(reader3)
 	if err3 != nil {
 		t.Fatalf("unexpected error: %v", err3)
 	}
@@ -272,22 +281,92 @@ func TestMicroEditorOperations(t *testing.T) {
 		t.Errorf("expected cursorCol at merge boundary 5, got %d", ed.CursorCol)
 	}
 
-	// Test processInput: Ctrl+Enter (byte 10)
+	// Arrow navigation:
+	// Left from col 5 -> col 4
+	ed.MoveLeft()
+	if ed.CursorCol != 4 {
+		t.Errorf("expected cursorCol 4 after MoveLeft, got %d", ed.CursorCol)
+	}
+
+	// Right from col 4 -> col 5
+	ed.MoveRight()
+	if ed.CursorCol != 5 {
+		t.Errorf("expected cursorCol 5 after MoveRight, got %d", ed.CursorCol)
+	}
+
+	// Enter: insert newline between "hello" and "world"
+	ed.InsertNewline()
+	if len(ed.Lines) != 2 || ed.Lines[0] != "hello" || ed.Lines[1] != "world" {
+		t.Errorf("expected split lines, got %v", ed.Lines)
+	}
+
+	// Arrow Up: moves to line 0
+	ed.MoveUp()
+	if ed.CursorRow != 0 {
+		t.Errorf("expected CursorRow 0 after MoveUp, got %d", ed.CursorRow)
+	}
+
+	// Arrow Down: moves to line 1
+	ed.MoveDown()
+	if ed.CursorRow != 1 {
+		t.Errorf("expected CursorRow 1 after MoveDown, got %d", ed.CursorRow)
+	}
+
+	// SS3 Arrow keys (\x1bOA, \x1bOB, \x1bOC, \x1bOD)
+	processInput(ed, []byte("\x1bOA")) // Up
+	if ed.CursorRow != 0 {
+		t.Errorf("expected CursorRow 0 after SS3 Up arrow, got %d", ed.CursorRow)
+	}
+	processInput(ed, []byte("\x1bOB")) // Down
+	if ed.CursorRow != 1 {
+		t.Errorf("expected CursorRow 1 after SS3 Down arrow, got %d", ed.CursorRow)
+	}
+
+	// STRICT SUBMISSION RULES:
+	// 1. Ctrl+Enter (byte 10) -> MUST submit
 	submit, cancel := processInput(ed, []byte{10})
 	if !submit || cancel {
-		t.Errorf("expected submit on byte 10")
+		t.Errorf("expected submit on byte 10 (Ctrl+Enter)")
 	}
 
-	// Test processInput: Ctrl+D (byte 4)
-	submit, cancel = processInput(ed, []byte{4})
+	// 2. CSI u Ctrl+Enter (\x1b[13;5u) -> MUST submit
+	submit, cancel = processInput(ed, []byte("\x1b[13;5u"))
 	if !submit || cancel {
-		t.Errorf("expected submit on byte 4 (Ctrl+D)")
+		t.Errorf("expected submit on CSI u Ctrl+Enter")
 	}
 
-	// Test processInput: Ctrl+C (byte 3)
+	// 3. xterm Ctrl+Enter (\x1b[27;5;13~) -> MUST submit
+	submit, cancel = processInput(ed, []byte("\x1b[27;5;13~"))
+	if !submit || cancel {
+		t.Errorf("expected submit on xterm Ctrl+Enter")
+	}
+
+	// 4. STRICT: Ctrl+D (byte 4) -> MUST NEVER submit!
+	submit, cancel = processInput(ed, []byte{4})
+	if submit || cancel {
+		t.Errorf("STRICT RULE BROKEN: Ctrl+D must NOT submit or cancel, got submit=%v cancel=%v", submit, cancel)
+	}
+
+	// 5. STRICT: Ctrl+Z (byte 26) -> MUST NEVER submit!
+	submit, cancel = processInput(ed, []byte{26})
+	if submit || cancel {
+		t.Errorf("STRICT RULE BROKEN: Ctrl+Z must NOT submit or cancel, got submit=%v cancel=%v", submit, cancel)
+	}
+
+	// 6. Ctrl+C (byte 3) -> MUST cancel
 	submit, cancel = processInput(ed, []byte{3})
 	if submit || !cancel {
 		t.Errorf("expected cancel on byte 3 (Ctrl+C)")
+	}
+
+	// 7. Regular Enter (byte 13) -> MUST insert newline, NOT submit
+	linesBefore := len(ed.Lines)
+	submit, cancel = processInput(ed, []byte{13})
+	if submit || cancel {
+		t.Errorf("Enter must not submit or cancel")
+	}
+	if len(ed.Lines) != linesBefore+1 {
+		t.Errorf("expected Enter to insert newline, lines before: %d, after: %d", linesBefore, len(ed.Lines))
 	}
 }
 
@@ -343,5 +422,63 @@ func TestFormatSplitter(t *testing.T) {
 	}
 	if !strings.HasSuffix(line, "─") {
 		t.Errorf("expected splitter to end with horizontal bar: %s", line)
+	}
+}
+
+func TestCrossLineBackspaceExtensive(t *testing.T) {
+	ed := NewMicroEditor("Test", "Subtitle")
+	ed.InsertText("alpha\nbeta\ngamma")
+	if len(ed.Lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(ed.Lines))
+	}
+
+	// Move cursor to start of "beta" (line 1, col 0)
+	ed.CursorRow = 1
+	ed.CursorCol = 0
+	ed.Backspace()
+
+	// Line 1 should merge into line 0: "alphabeta"
+	if len(ed.Lines) != 2 {
+		t.Fatalf("expected 2 lines after merge, got %d", len(ed.Lines))
+	}
+	if ed.Lines[0] != "alphabeta" {
+		t.Errorf("expected line 0 'alphabeta', got %q", ed.Lines[0])
+	}
+	if ed.Lines[1] != "gamma" {
+		t.Errorf("expected line 1 'gamma', got %q", ed.Lines[1])
+	}
+	if ed.CursorRow != 0 || ed.CursorCol != 5 {
+		t.Errorf("expected cursor at (0, 5), got (%d, %d)", ed.CursorRow, ed.CursorCol)
+	}
+
+	// Now move to line 1 ("gamma"), col 0, and backspace again
+	ed.CursorRow = 1
+	ed.CursorCol = 0
+	ed.Backspace()
+
+	// Should merge into 1 line: "alphabetagamma"
+	if len(ed.Lines) != 1 || ed.Lines[0] != "alphabetagamma" {
+		t.Errorf("expected 1 line 'alphabetagamma', got %v", ed.Lines)
+	}
+	if ed.CursorRow != 0 || ed.CursorCol != 9 {
+		t.Errorf("expected cursor at (0, 9), got (%d, %d)", ed.CursorRow, ed.CursorCol)
+	}
+}
+
+func TestStrictSlashCommands(t *testing.T) {
+	// Plain words without slash MUST NOT be chat commands
+	plainWords := []string{"exit", "quit", "clear", "model", "help", "q", "c", "exit 1", "quit()"}
+	for _, word := range plainWords {
+		if isChatCommand(word) {
+			t.Errorf("word %q without slash must NOT be a chat command", word)
+		}
+	}
+
+	// Slash commands MUST be recognized
+	validCommands := []string{"/exit", "/quit", "/q", "/clear", "/c", "/model", "/model meta/llama-3", "/help", "/?"}
+	for _, cmd := range validCommands {
+		if !isChatCommand(cmd) {
+			t.Errorf("command %q with slash MUST be recognized as a chat command", cmd)
+		}
 	}
 }

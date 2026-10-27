@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 const (
@@ -122,7 +123,7 @@ func (e *MicroEditor) InsertNewline() {
 
 	e.Lines[e.CursorRow] = left
 
-	// Insert new row after current row
+	// Insert new row after current row safely
 	newLines := make([]string, 0, len(e.Lines)+1)
 	newLines = append(newLines, e.Lines[:e.CursorRow+1]...)
 	newLines = append(newLines, right)
@@ -140,7 +141,9 @@ func (e *MicroEditor) Backspace() {
 		if e.CursorCol > len(runes) {
 			e.CursorCol = len(runes)
 		}
-		newRunes := append(runes[:e.CursorCol-1], runes[e.CursorCol:]...)
+		newRunes := make([]rune, 0, len(runes)-1)
+		newRunes = append(newRunes, runes[:e.CursorCol-1]...)
+		newRunes = append(newRunes, runes[e.CursorCol:]...)
 		e.Lines[e.CursorRow] = string(newRunes)
 		e.CursorCol--
 	} else if e.CursorRow > 0 {
@@ -153,10 +156,34 @@ func (e *MicroEditor) Backspace() {
 
 		e.Lines[e.CursorRow-1] = prevLine + currLine
 
-		// Remove current line
-		e.Lines = append(e.Lines[:e.CursorRow], e.Lines[e.CursorRow+1:]...)
+		// Remove current line safely
+		newLines := make([]string, 0, len(e.Lines)-1)
+		newLines = append(newLines, e.Lines[:e.CursorRow]...)
+		newLines = append(newLines, e.Lines[e.CursorRow+1:]...)
+		e.Lines = newLines
+
 		e.CursorRow--
 		e.CursorCol = newCursorCol
+	}
+}
+
+func (e *MicroEditor) Delete() {
+	line := e.Lines[e.CursorRow]
+	runes := []rune(line)
+	if e.CursorCol < len(runes) {
+		newRunes := make([]rune, 0, len(runes)-1)
+		newRunes = append(newRunes, runes[:e.CursorCol]...)
+		newRunes = append(newRunes, runes[e.CursorCol+1:]...)
+		e.Lines[e.CursorRow] = string(newRunes)
+	} else if e.CursorRow < len(e.Lines)-1 {
+		// Merge next line into current line
+		nextLine := e.Lines[e.CursorRow+1]
+		e.Lines[e.CursorRow] = line + nextLine
+
+		newLines := make([]string, 0, len(e.Lines)-1)
+		newLines = append(newLines, e.Lines[:e.CursorRow+1]...)
+		newLines = append(newLines, e.Lines[e.CursorRow+2:]...)
+		e.Lines = newLines
 	}
 }
 
@@ -245,7 +272,7 @@ func runComposer(title, subtitle string) (string, bool, error) {
 		n, readErr := os.Stdin.Read(buf)
 		if readErr != nil {
 			if readErr == io.EOF {
-				break
+				return "", true, nil
 			}
 			return "", false, readErr
 		}
@@ -263,7 +290,6 @@ func runComposer(title, subtitle string) (string, bool, error) {
 					// Inside paste payload: insert all characters verbatim
 					editor.InsertText(part)
 				} else if part != "" {
-					// Handle any characters before or after paste marker
 					processInput(editor, []byte(part))
 				}
 			}
@@ -278,7 +304,9 @@ func runComposer(title, subtitle string) (string, bool, error) {
 		if shouldSubmit {
 			content := editor.Content()
 			lower := strings.ToLower(content)
-			if lower == "exit" || lower == "quit" || lower == "/q" || lower == "/exit" || lower == "/quit" {
+			// STRICT: Only commands with leading slash exit (/exit, /quit, /q).
+			// Words without slash (like "exit" or "quit") are treated as literal prompt text!
+			if lower == "/exit" || lower == "/quit" || lower == "/q" {
 				return "", true, nil
 			}
 			return content, false, nil
@@ -286,9 +314,122 @@ func runComposer(title, subtitle string) (string, bool, error) {
 
 		editor.Render()
 	}
+}
 
-	content := editor.Content()
-	return content, false, nil
+// runInlineTurnEditor executes the micro-editor inline on stdout for chatbot turns
+// Returns (prompt, isCancelled, error)
+func runInlineTurnEditor() (string, bool, error) {
+	fd := os.Stdin.Fd()
+	state, err := makeRaw(fd)
+	if err != nil {
+		return "", false, err
+	}
+
+	var restoreOnce sync.Once
+	restore := func() {
+		restoreOnce.Do(func() {
+			_ = restoreTerm(fd, state)
+		})
+	}
+	defer restore()
+
+	editor := NewMicroEditor("", "")
+	prevCursorRow := 0
+	prevLineCount := 0
+
+	renderInline := func() {
+		var b strings.Builder
+		b.WriteString(ansiHideCursor)
+
+		// Move cursor back to the start of the first prompt line
+		if prevLineCount > 0 {
+			if prevCursorRow > 0 {
+				b.WriteString(fmt.Sprintf("\x1b[%dA", prevCursorRow))
+			}
+			b.WriteString("\r\x1b[J") // clear from top prompt line down
+		}
+
+		// Draw all prompt lines
+		for i, line := range editor.Lines {
+			prefix := ">>> "
+			if i > 0 {
+				prefix = "... "
+			}
+			b.WriteString(prefix)
+			b.WriteString(line)
+			b.WriteString("\r\n")
+		}
+
+		// Position cursor at (editor.CursorRow, editor.CursorCol)
+		linesUp := len(editor.Lines) - editor.CursorRow
+		targetCol := 4 + editor.CursorCol + 1 // 1-based ANSI column
+
+		b.WriteString(fmt.Sprintf("\x1b[%dA\r\x1b[%dG", linesUp, targetCol))
+		b.WriteString(ansiShowCursor)
+
+		_, _ = os.Stdout.WriteString(b.String())
+		_ = os.Stdout.Sync()
+
+		prevCursorRow = editor.CursorRow
+		prevLineCount = len(editor.Lines)
+	}
+
+	renderInline()
+
+	buf := make([]byte, 1024)
+	for {
+		n, readErr := os.Stdin.Read(buf)
+		if readErr != nil {
+			if readErr == io.EOF {
+				return "", true, nil
+			}
+			return "", false, readErr
+		}
+		if n == 0 {
+			continue
+		}
+
+		input := string(buf[:n])
+
+		// Handle bracketed paste blocks
+		if strings.Contains(input, "\x1b[2004~") {
+			parts := strings.Split(input, "\x1b[2004~")
+			for i, part := range parts {
+				if i%2 == 1 {
+					editor.InsertText(part)
+				} else if part != "" {
+					processInput(editor, []byte(part))
+				}
+			}
+			renderInline()
+			continue
+		}
+
+		shouldSubmit, shouldCancel := processInput(editor, buf[:n])
+		if shouldCancel {
+			linesDown := len(editor.Lines) - editor.CursorRow
+			if linesDown > 0 {
+				_, _ = os.Stdout.WriteString(fmt.Sprintf("\x1b[%dB", linesDown))
+			}
+			_, _ = os.Stdout.WriteString("\r\n")
+			_ = os.Stdout.Sync()
+			return "", true, nil
+		}
+
+		if shouldSubmit {
+			linesDown := len(editor.Lines) - editor.CursorRow
+			if linesDown > 0 {
+				_, _ = os.Stdout.WriteString(fmt.Sprintf("\x1b[%dB", linesDown))
+			}
+			_, _ = os.Stdout.WriteString("\r\n")
+			_ = os.Stdout.Sync()
+
+			content := editor.Content()
+			return content, false, nil
+		}
+
+		renderInline()
+	}
 }
 
 // processInput handles incoming bytes in raw mode
@@ -298,14 +439,21 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 	for i < len(data) {
 		b := data[i]
 
-		// Ctrl+C (ASCII 3)
+		// Ctrl+C (ASCII 3) -> Cancel
 		if b == 3 {
 			return false, true
 		}
 
-		// Ctrl+D (ASCII 4) -> Submit
+		// STRICT: Ctrl+D (ASCII 4) -> Do NOT submit!
 		if b == 4 {
-			return true, false
+			i++
+			continue
+		}
+
+		// STRICT: Ctrl+Z (ASCII 26) -> Do NOT submit!
+		if b == 26 {
+			i++
+			continue
 		}
 
 		// Backspace (ASCII 127 or ASCII 8)
@@ -315,7 +463,7 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 			continue
 		}
 
-		// Enter (ASCII 13 \r)
+		// Enter (ASCII 13 \r) -> Always insert a newline
 		if b == 13 {
 			editor.InsertNewline()
 			i++
@@ -323,7 +471,7 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 		}
 
 		// Linefeed (ASCII 10 \n)
-		// In raw mode, byte 10 when sent independently is Ctrl+Enter!
+		// In raw mode, byte 10 when sent independently is Ctrl+Enter (or Ctrl+J)!
 		if b == 10 {
 			return true, false
 		}
@@ -331,18 +479,22 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 		// ANSI Escape Sequences
 		if b == 27 {
 			rem := data[i:]
-			// Check for Ctrl+Enter sequences: \x1b[13;5u or \x1b[27;5;13~ or \x1b[10~
-			if strings.HasPrefix(string(rem), "\x1b[13;5u") {
-				return true, false
-			}
-			if strings.HasPrefix(string(rem), "\x1b[27;5;13~") {
-				return true, false
-			}
-			if strings.HasPrefix(string(rem), "\x1b[10~") {
+			remStr := string(rem)
+
+			// 1. Check for Ctrl+Enter sequences:
+			// \x1b[13;5u (CSI u), \x1b[27;5;13~ (xterm), \x1b[10;5u, \x1b[10~, \x1b[13~, \x1b\r, \x1b\n
+			if strings.HasPrefix(remStr, "\x1b[13;5u") ||
+				strings.HasPrefix(remStr, "\x1b[27;5;13~") ||
+				strings.HasPrefix(remStr, "\x1b[10;5u") ||
+				strings.HasPrefix(remStr, "\x1b[10~") ||
+				strings.HasPrefix(remStr, "\x1b[13~") ||
+				strings.HasPrefix(remStr, "\x1b\r") ||
+				strings.HasPrefix(remStr, "\x1b\n") {
 				return true, false
 			}
 
-			// Arrow keys
+			// 2. Check Arrow keys, Home, End, Delete, PageUp, PageDown
+			// Check CSI sequences: \x1b[...
 			if len(rem) >= 3 && rem[1] == '[' {
 				switch rem[2] {
 				case 'A': // Up
@@ -371,19 +523,75 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 					continue
 				}
 
-				// Check Delete key: \x1b[3~
+				// Check modified keys or tilde sequences: \x1b[...~
+				// Delete key: \x1b[3~
 				if len(rem) >= 4 && rem[2] == '3' && rem[3] == '~' {
-					line := editor.Lines[editor.CursorRow]
-					runes := []rune(line)
-					if editor.CursorCol < len(runes) {
-						newRunes := append(runes[:editor.CursorCol], runes[editor.CursorCol+1:]...)
-						editor.Lines[editor.CursorRow] = string(newRunes)
-					} else if editor.CursorRow < len(editor.Lines)-1 {
-						// Merge next line
-						editor.Lines[editor.CursorRow] = line + editor.Lines[editor.CursorRow+1]
-						editor.Lines = append(editor.Lines[:editor.CursorRow+1], editor.Lines[editor.CursorRow+2:]...)
-					}
+					editor.Delete()
 					i += 4
+					continue
+				}
+				// Home: \x1b[1~ or \x1b[7~
+				if len(rem) >= 4 && (rem[2] == '1' || rem[2] == '7') && rem[3] == '~' {
+					editor.CursorCol = 0
+					i += 4
+					continue
+				}
+				// End: \x1b[4~ or \x1b[8~
+				if len(rem) >= 4 && (rem[2] == '4' || rem[2] == '8') && rem[3] == '~' {
+					editor.CursorCol = len([]rune(editor.Lines[editor.CursorRow]))
+					i += 4
+					continue
+				}
+
+				// Modified arrow keys like \x1b[1;5A (Ctrl+Up), etc.
+				if len(rem) >= 6 && rem[2] == '1' && rem[3] == ';' {
+					switch rem[5] {
+					case 'A':
+						editor.MoveUp()
+						i += 6
+						continue
+					case 'B':
+						editor.MoveDown()
+						i += 6
+						continue
+					case 'C':
+						editor.MoveRight()
+						i += 6
+						continue
+					case 'D':
+						editor.MoveLeft()
+						i += 6
+						continue
+					}
+				}
+			}
+
+			// Check SS3 sequences: \x1bO... (Application mode cursor keys)
+			if len(rem) >= 3 && rem[1] == 'O' {
+				switch rem[2] {
+				case 'A': // Up
+					editor.MoveUp()
+					i += 3
+					continue
+				case 'B': // Down
+					editor.MoveDown()
+					i += 3
+					continue
+				case 'C': // Right
+					editor.MoveRight()
+					i += 3
+					continue
+				case 'D': // Left
+					editor.MoveLeft()
+					i += 3
+					continue
+				case 'H': // Home
+					editor.CursorCol = 0
+					i += 3
+					continue
+				case 'F': // End
+					editor.CursorCol = len([]rune(editor.Lines[editor.CursorRow]))
+					i += 3
 					continue
 				}
 			}
@@ -393,9 +601,12 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 			continue
 		}
 
-		// Printable UTF-8 runes
-		if b >= 32 {
-			editor.InsertChar(rune(b))
+		// Printable characters (decode full UTF-8 rune)
+		r, size := utf8.DecodeRune(data[i:])
+		if r != utf8.RuneError && r >= 32 {
+			editor.InsertChar(r)
+			i += size
+			continue
 		}
 
 		i++

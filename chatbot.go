@@ -11,10 +11,12 @@ import (
 	"sync"
 )
 
+// isChatCommand checks if a line is an explicit slash command.
+// STRICT: Words without a leading slash (like "exit", "quit", "clear")
+// are treated as literal text/code and never triggered as commands!
 func isChatCommand(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
-	if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" ||
-		lower == "/exit" || lower == "/quit" ||
+	if lower == "/exit" || lower == "/quit" || lower == "/q" ||
 		lower == "/clear" || lower == "/c" ||
 		lower == "/help" || lower == "/?" ||
 		strings.HasPrefix(lower, "/model") {
@@ -23,18 +25,10 @@ func isChatCommand(line string) bool {
 	return false
 }
 
-func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error) {
+func readChatPromptCooked(reader *bufio.Reader) (string, error) {
 	var lines []string
 
 	for {
-		if isStdoutTerminal {
-			if len(lines) == 0 {
-				fmt.Print(">>> ")
-			} else {
-				fmt.Print("... ")
-			}
-		}
-
 		rawLine, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -49,14 +43,7 @@ func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error)
 		// Strip trailing CR and LF
 		line := strings.TrimRight(rawLine, "\r\n")
 
-		// Detect terminal escape sequences for Ctrl+Enter (CSI u and xterm formats)
-		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
-		if hasCtrlEnter {
-			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
-		}
-
-		// If first line and it's an immediate command (exit, /clear, /model, /help), submit immediately
+		// If first line and it's an explicit slash command (/exit, /clear, /model, /help), submit immediately
 		if len(lines) == 0 {
 			trimmed := strings.TrimSpace(line)
 			if isChatCommand(trimmed) {
@@ -64,8 +51,11 @@ func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error)
 			}
 		}
 
-		// If Ctrl+Enter was detected, submit immediately
+		// Detect terminal escape sequences for Ctrl+Enter (CSI u and xterm formats)
+		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
 		if hasCtrlEnter {
+			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
 			if strings.TrimSpace(line) != "" {
 				lines = append(lines, line)
 			}
@@ -77,11 +67,26 @@ func readChatPrompt(reader *bufio.Reader, isStdoutTerminal bool) (string, error)
 			continue
 		}
 
-		// Blank lines inside prompt are PRESERVED as newlines (Bug 2 fix: never submit on empty lines!)
+		// Blank lines inside prompt are preserved as newlines
 		lines = append(lines, line)
 	}
 
 	return strings.TrimSpace(strings.Join(lines, "\n")), nil
+}
+
+func readChatPrompt(reader *bufio.Reader, isInteractive bool) (string, error) {
+	if isInteractive {
+		content, isCancelled, err := runInlineTurnEditor()
+		if err != nil {
+			return "", err
+		}
+		if isCancelled {
+			return "/exit", nil
+		}
+		return content, nil
+	}
+
+	return readChatPromptCooked(reader)
 }
 
 func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
@@ -119,7 +124,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		} else if opts.AppendFile != "" {
 			fmt.Printf("Appending chat to: %s\n", opts.AppendFile)
 		}
-		fmt.Println("Send: Ctrl+Enter (or Ctrl+D) | Newline: Enter | Exit: exit, /q, /exit | Cancel: Ctrl+C")
+		fmt.Println("Send: Ctrl+Enter | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
 		fmt.Println()
 	}
 
@@ -210,8 +215,10 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		executeQuery(initialPrompt)
 	}
 
+	isInteractive := opts.IsStdoutTerminal && isCharDevice(os.Stdin)
+
 	for {
-		input, readErr := readChatPrompt(reader, opts.IsStdoutTerminal)
+		input, readErr := readChatPrompt(reader, isInteractive)
 		if readErr != nil {
 			if readErr == io.EOF {
 				break
@@ -223,9 +230,10 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 			continue
 		}
 
-		// Check REPL commands
+		// STRICT: Only commands starting with '/' are chat commands.
+		// Plain words like "exit" or "quit" without slash are passed to the model as literal text!
 		lower := strings.ToLower(input)
-		if lower == "exit" || lower == "quit" || lower == "/q" || lower == ":q" || lower == "/exit" || lower == "/quit" {
+		if lower == "/exit" || lower == "/quit" || lower == "/q" {
 			break
 		}
 
@@ -255,7 +263,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
   /clear, /c        Clear conversation memory for this session
   /model <name>     Switch active model for this session
   /help             Show this help message
-  exit, quit, /q    Exit chat mode`)
+  /exit, /quit, /q  Exit chat mode`)
 			fmt.Println()
 			continue
 		}

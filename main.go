@@ -187,9 +187,9 @@ func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool
 
 func readInteractivePrompt(targetDesc string) (string, error) {
 	title := fmt.Sprintf("ask v%s — Multiline Prompt Composer", version)
-	subtitle := "Send: Ctrl+Enter | Move: Arrows/Backspace | Cancel: Ctrl+C | Exit: /q"
+	subtitle := "Send: Ctrl+Enter | Move: Arrows/Backspace | Cancel: Ctrl+C | Exit: /exit, /q"
 	if targetDesc != "" {
-		subtitle = fmt.Sprintf("Target: %s | Send: Ctrl+Enter | Cancel: Ctrl+C | Exit: /q", targetDesc)
+		subtitle = fmt.Sprintf("Target: %s | Send: Ctrl+Enter | Cancel: Ctrl+C | Exit: /exit, /q", targetDesc)
 	}
 
 	content, isCancelled, err := runComposer(title, subtitle)

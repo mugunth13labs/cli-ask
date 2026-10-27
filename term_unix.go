@@ -20,8 +20,16 @@ func makeRaw(fd uintptr) (*TermState, error) {
 
 	state := &TermState{termios: termios}
 	raw := termios
-	// Disable ICANON (canonical line buffer) and ECHO
-	raw.Lflag &^= syscall.ICANON | syscall.ECHO
+
+	// Disable ICRNL (mapping CR to NL on input), INLCR, IGNCR, IXON (software flow control)
+	// This is critical: ICRNL was causing regular Enter (\r) to be translated to \n (10),
+	// which falsely triggered Ctrl+Enter submission on Linux!
+	raw.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
+
+	// Disable canonical mode (ICANON), echo (ECHO, ECHONL), signal generation (ISIG), and extended input processing (IEXTEN)
+	// With ISIG disabled, Ctrl+C sends byte 3, Ctrl+D sends byte 4, and Ctrl+Z sends byte 26 directly
+	raw.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+
 	raw.Cc[syscall.VMIN] = 1
 	raw.Cc[syscall.VTIME] = 0
 
