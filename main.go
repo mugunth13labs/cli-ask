@@ -394,13 +394,15 @@ func main() {
 	// Dispatch chatbot immediately before reading stdin prompts
 	if parsed.Action == "chatbot" {
 		if parsed.Split {
-			if isStdinTerminal && isStdoutTerminal {
-				if err := RunDualPaneWorkspace(cfg, parsed.Prompt, queryOpts); err != nil {
-					fmt.Fprintf(os.Stderr, "Dual pane error: %v\n", err)
-					os.Exit(1)
-				}
-				return
+			if !isStdinTerminal || !isStdoutTerminal {
+				fmt.Fprintln(os.Stderr, "Error: dual pane workspace requires an interactive terminal.")
+				os.Exit(1)
 			}
+			if err := RunDualPaneWorkspace(cfg, parsed.Prompt, queryOpts); err != nil {
+				fmt.Fprintf(os.Stderr, "Dual pane error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
 		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
 			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
