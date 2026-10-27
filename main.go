@@ -6,19 +6,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	version = "0.3.3"
+	version = "0.3.4"
 )
+
+var codeFileExts = map[string]bool{
+	".sh": true, ".bash": true, ".zsh": true, ".pbs": true, ".slurm": true,
+	".py": true, ".go": true, ".rs": true, ".js": true, ".ts": true,
+	".c": true, ".cpp": true, ".cc": true, ".h": true, ".hpp": true,
+	".java": true, ".rb": true, ".php": true, ".lua": true, ".sql": true,
+	".r": true, ".yaml": true, ".yml": true, ".json": true, ".toml": true,
+	".ini": true, ".conf": true, ".xml": true, ".html": true, ".css": true,
+}
 
 type ParsedArgs struct {
 	Action     string // "help", "version", "config", "clear", "set-key", "set-model", "update-self", "chatbot", "query"
 	ActionArg  string // value for --set-key or --set-model
 	OutputFile string // path for -o / --output
 	AppendFile string // path for -a / --append
+	CodeGen    bool   // pure code generation mode (--cg / --codegen)
 	Prompt     string // collected prompt tokens
 	UseContext bool   // true unless --no-context is provided
 }
@@ -101,6 +112,10 @@ func parseCLIArgs(args []string) ParsedArgs {
 				result.UseContext = false
 				continue
 			}
+			if arg == "-cg" || arg == "--cg" || arg == "--codegen" {
+				result.CodeGen = true
+				continue
+			}
 			if arg == "-o" || arg == "--output" {
 				if i+1 < len(args) {
 					result.OutputFile = args[i+1]
@@ -125,6 +140,50 @@ func parseCLIArgs(args []string) ParsedArgs {
 
 	result.Prompt = strings.Join(promptTokens, " ")
 	return result
+}
+
+func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool {
+	if parsed.CodeGen {
+		return true
+	}
+
+	// Check destination file name / extension
+	target := parsed.OutputFile
+	if target == "" {
+		target = parsed.AppendFile
+	}
+	if target != "" {
+		base := strings.ToLower(filepath.Base(target))
+		if base == "dockerfile" || base == "makefile" || base == "containerfile" {
+			return true
+		}
+		ext := strings.ToLower(filepath.Ext(target))
+		if codeFileExts[ext] {
+			return true
+		}
+	}
+
+	// Check shebang or script markers in stdin or prompt
+	combined := strings.ToLower(stdinText + " " + userPrompt)
+	if strings.Contains(stdinText, "#!/") || strings.Contains(stdinText, "\n#PBS") || strings.Contains(stdinText, "\n#SBATCH") {
+		return true
+	}
+
+	// Check prompt keywords for code/script intent
+	codeTriggers := []string{
+		"generate a script", "generate script", "write a script", "write script",
+		"write code", "generate code", "remove alien lines", "remove all the alien lines",
+		"refactor this script", "refactor script", "fix this script", "fix the script",
+		"pbs script", "slurm script", "bash script", "shell script", "python script",
+		"dockerfile", "makefile", "kubernetes manifest", "systemd service unit",
+	}
+	for _, trigger := range codeTriggers {
+		if strings.Contains(combined, trigger) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func readInteractivePrompt() (string, error) {
@@ -203,6 +262,7 @@ Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
   ask                           Interactive multiline entry (Ctrl+Enter or blank line to submit)
+  ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
   ask --chatbot, -i             Start continuous interactive chat session
   echo "code" | ask "explain"   Pipe stdin to ask
   ask -- <prompt>               Treat everything after -- as literal prompt
@@ -210,6 +270,10 @@ Usage:
 File Output:
   ask -o, --output <file>       Write AI response directly to file (overwrites)
   ask -a, --append <file>       Append AI response directly to file
+
+Code Generation:
+  ask --cg, --codegen           Generate pure executable code/scripts without commentary
+  ask -o script.sh "prompt"     Auto-enables codegen mode for script/code file extensions
 
 Chatbot Mode:
   ask --chatbot, -i             Continuous multi-turn chat session with REPL
@@ -303,13 +367,6 @@ func main() {
 	isStdoutTerminal := isCharDevice(os.Stdout)
 	isStderrTerminal := isCharDevice(os.Stderr)
 
-	queryOpts := QueryOptions{
-		OutputFile:       parsed.OutputFile,
-		AppendFile:       parsed.AppendFile,
-		IsStdoutTerminal: isStdoutTerminal,
-		IsStderrTerminal: isStderrTerminal,
-	}
-
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
@@ -331,15 +388,8 @@ func main() {
 		}
 	}
 
-	if parsed.Action == "chatbot" {
-		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
-			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	userPrompt := parsed.Prompt
+	var pipedStdinText string
 
 	// If no prompt in args:
 	if strings.TrimSpace(userPrompt) == "" {
@@ -360,10 +410,28 @@ func main() {
 		}
 	} else if !isStdinTerminal {
 		// Prompt given in args + piped stdin potentially attached
-		stdinText := readPipedStdinWithTimeout(150 * time.Millisecond)
-		if stdinText != "" {
-			userPrompt = userPrompt + "\n\nContext:\n" + stdinText
+		pipedStdinText = readPipedStdinWithTimeout(150 * time.Millisecond)
+		if pipedStdinText != "" {
+			userPrompt = userPrompt + "\n\nContext:\n" + pipedStdinText
 		}
+	}
+
+	isCodeGen := detectCodeGen(&parsed, userPrompt, pipedStdinText)
+
+	queryOpts := QueryOptions{
+		OutputFile:       parsed.OutputFile,
+		AppendFile:       parsed.AppendFile,
+		IsCodeGen:        isCodeGen,
+		IsStdoutTerminal: isStdoutTerminal,
+		IsStderrTerminal: isStderrTerminal,
+	}
+
+	if parsed.Action == "chatbot" {
+		if err := runChatbot(cfg, parsed.Prompt, queryOpts); err != nil {
+			fmt.Fprintf(os.Stderr, "Chat error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if strings.TrimSpace(userPrompt) == "" {
@@ -377,8 +445,14 @@ func main() {
 		currentSession, _ = loadSession(sessionID)
 	}
 
+	// Select system prompt based on codegen mode
+	activeSystemPrompt := systemPrompt
+	if isCodeGen {
+		activeSystemPrompt = codePrompt
+	}
+
 	var apiMessages []Message
-	apiMessages = append(apiMessages, Message{Role: "system", Content: systemPrompt})
+	apiMessages = append(apiMessages, Message{Role: "system", Content: activeSystemPrompt})
 
 	if parsed.UseContext && currentSession != nil && len(currentSession.Messages) > 0 {
 		compacted := compactHistory(currentSession.Messages)

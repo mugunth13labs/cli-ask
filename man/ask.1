@@ -1,9 +1,12 @@
-.TH ASK 1 "October 2026" "cli-ask 0.3.3" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.3.4" "User Commands"
 .SH NAME
-ask \- non-intrusive terminal AI assistant with session-scoped context, chatbot mode, and direct file output
+ask \- non-intrusive terminal AI assistant with session-scoped context, code generation, and direct file output
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
+.br
+.B ask
+\fB--cg\fR | \fB--codegen\fR [\fIOPTIONS\fR] [\fIPROMPT\fR]
 .br
 .B ask
 \fB--chatbot\fR | \fB-i\fR [\fIPROMPT\fR]
@@ -30,18 +33,21 @@ is a lightweight, zero-dependency command-line utility designed for system admin
 .PP
 Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in terminal-native plain text with ASCII underlines and clean indentation, avoiding unrendered web markdown.
 .PP
+When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.pbs\fR, etc.) or modifying scripts via pipes, \fBask\fR automatically activates pure code generation mode. In this mode, conversational fluff, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
+.PP
 When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous REPL session, allowing natural conversational back-and-forth prompting within the terminal without exiting after each turn.
 .PP
 When invoked with no prompt arguments in an interactive terminal, \fBask\fR enters multiline input mode. Pressing \fBEnter\fR inserts a newline, allowing multiline scripts and prompts to be typed or pasted freely. The prompt is submitted upon pressing \fBCtrl+Enter\fR, entering a blank line (double \fBEnter\fR), or pressing \fBCtrl+D\fR.
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
-.PP
-When outputting to an interactive terminal, a subtle horizontal splitter line separates user queries from AI responses. On non-terminal stdout or redirection pipelines, status indicators and dividers are automatically suppressed to preserve clean data streaming, while live progress is intelligently displayed on standard error.
 
 .SH OPTIONS
 .TP
+.BR \-cg ", " \-\-cg ", " \-\-codegen
+Enable pure code generation mode: outputs strictly raw, executable code or scripts without introductory titles, ASCII underlines, conversational filler, or markdown code fences.
+.TP
 .BR \-o ", " \-\-output " " \fIFILE\fR
-Write the AI response directly to \fIFILE\fR (overwrites existing contents).
+Write the AI response directly to \fIFILE\fR (overwrites existing contents). Automatically enables pure code generation if \fIFILE\fR has a script/code extension.
 .TP
 .BR \-a ", " \-\-append " " \fIFILE\fR
 Append the AI response directly to \fIFILE\fR (creates file if it does not exist).
@@ -106,29 +112,20 @@ Session-scoped conversation history for the active terminal shell.
 
 .SH EXAMPLES
 .TP
+.B Generate pure PBS script without alien titles:
+ask -o job.pbs "generate a pbs script template"
+.TP
+.B Explicit code generation mode:
+ask --cg "write a python function to compute fibonacci"
+.TP
+.B Filter and refactor a script via pipe:
+cat test.pbs | ask "remove alien lines and request 2 nodes" > test2.pbs
+.TP
 .B Quick command lookup:
 ask "how to find listening ports in linux"
 .TP
-.B Save response directly to file:
-ask -o ports.txt "how to find listening ports in linux"
-.TP
-.B Append response to notes:
-ask -a notes.md "give an example of grep -E"
-.TP
 .B Continuous chatbot session:
 ask -i
-.TP
-.B Passing literal command arguments:
-ask ps -eo pid,cmd --sort
-.TP
-.B Interactive multiline entry:
-ask
-.TP
-.B Standard input piping:
-git diff | ask "summarize these changes"
-.TP
-.B Standard shell redirection:
-ask "summarize docker cgroups" >> notes.txt
 
 .SH AUTHOR
 Maintained by Mugunthan <https://github.com/mugunth13labs>.

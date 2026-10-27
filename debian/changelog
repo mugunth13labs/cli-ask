@@ -1,3 +1,13 @@
+cli-ask (0.3.4-1) unstable; urgency=medium
+
+  * Add pure code generation mode (--cg, --codegen).
+  * Auto-detect code generation intent from target file extensions (.pbs, .sh, .py, etc.).
+  * Auto-detect script refactoring requests and shebangs in piped stdin.
+  * Suppress artificial ASCII title banners and underlines when generating code.
+  * Strip markdown code fences automatically in codegen mode.
+
+ -- Mugunthan <mugunth13@proton.me>  Tue, 27 Oct 2026 13:30:00 +0800
+
 cli-ask (0.3.3-1) unstable; urgency=medium
 
   * Standardize multiline prompt entry across interactive and chatbot modes.

@@ -54,6 +54,27 @@ func TestParseCLIArgsChatbotWithPrompt(t *testing.T) {
 	}
 }
 
+func TestParseCLIArgsCodeGen(t *testing.T) {
+	p1 := parseCLIArgs([]string{"--cg", "fibonacci", "in", "python"})
+	if !p1.CodeGen {
+		t.Errorf("expected CodeGen true for --cg")
+	}
+	if p1.Prompt != "fibonacci in python" {
+		t.Errorf("expected prompt 'fibonacci in python', got %q", p1.Prompt)
+	}
+
+	p2 := parseCLIArgs([]string{"--codegen", "-o", "fib.py", "fibonacci"})
+	if !p2.CodeGen {
+		t.Errorf("expected CodeGen true for --codegen")
+	}
+	if p2.OutputFile != "fib.py" {
+		t.Errorf("expected OutputFile 'fib.py', got %q", p2.OutputFile)
+	}
+	if p2.Prompt != "fibonacci" {
+		t.Errorf("expected prompt 'fibonacci', got %q", p2.Prompt)
+	}
+}
+
 func TestParseCLIArgsFileOutput(t *testing.T) {
 	p1 := parseCLIArgs([]string{"-o", "out.txt", "explain", "kubernetes"})
 	if p1.OutputFile != "out.txt" {
@@ -126,15 +147,18 @@ func TestParseCLIArgsDisambiguation(t *testing.T) {
 }
 
 func TestParseCLIArgsEscapeSeparator(t *testing.T) {
-	p := parseCLIArgs([]string{"--", "--clear", "-c", "--config", "-i", "-o", "file.txt"})
+	p := parseCLIArgs([]string{"--", "--clear", "-c", "--config", "-i", "-o", "file.txt", "--cg"})
 	if p.Action != "query" {
 		t.Errorf("expected action 'query', got %q", p.Action)
 	}
 	if p.OutputFile != "" {
 		t.Errorf("expected OutputFile empty when after --, got %q", p.OutputFile)
 	}
-	if p.Prompt != "--clear -c --config -i -o file.txt" {
-		t.Errorf("expected prompt '--clear -c --config -i -o file.txt', got %q", p.Prompt)
+	if p.CodeGen {
+		t.Errorf("expected CodeGen false when after --")
+	}
+	if p.Prompt != "--clear -c --config -i -o file.txt --cg" {
+		t.Errorf("expected prompt '--clear -c --config -i -o file.txt --cg', got %q", p.Prompt)
 	}
 }
 
@@ -145,6 +169,47 @@ func TestParseCLIArgsNoContext(t *testing.T) {
 	}
 	if p.Prompt != "explain this" {
 		t.Errorf("expected prompt 'explain this', got %q", p.Prompt)
+	}
+}
+
+func TestDetectCodeGen(t *testing.T) {
+	// 1. Explicit flag
+	p1 := ParsedArgs{CodeGen: true}
+	if !detectCodeGen(&p1, "hello", "") {
+		t.Errorf("expected detectCodeGen true for explicit flag")
+	}
+
+	// 2. Output file extension (.pbs)
+	p2 := ParsedArgs{OutputFile: "test.pbs"}
+	if !detectCodeGen(&p2, "generate a pbs script template", "") {
+		t.Errorf("expected detectCodeGen true for .pbs output")
+	}
+
+	// 3. Stdin with shebang and script keywords
+	p3 := ParsedArgs{}
+	if !detectCodeGen(&p3, "remove all the alien lines from this script", "#!/bin/bash\n#PBS -N job\n") {
+		t.Errorf("expected detectCodeGen true for shebang + script prompt")
+	}
+
+	// 4. Normal prompt without code cues
+	p4 := ParsedArgs{}
+	if detectCodeGen(&p4, "what is the capital of France?", "") {
+		t.Errorf("expected detectCodeGen false for non-code prompt")
+	}
+}
+
+func TestStripMarkdownFences(t *testing.T) {
+	input1 := "```bash\n#!/bin/bash\necho hello\n```"
+	stripped1 := stripMarkdownFences(input1)
+	expected1 := "#!/bin/bash\necho hello"
+	if stripped1 != expected1 {
+		t.Errorf("expected %q, got %q", expected1, stripped1)
+	}
+
+	input2 := "#!/bin/bash\necho hello"
+	stripped2 := stripMarkdownFences(input2)
+	if stripped2 != input2 {
+		t.Errorf("expected %q, got %q", input2, stripped2)
 	}
 }
 

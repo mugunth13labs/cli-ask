@@ -25,6 +25,7 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 `ask` is built on a different principle: **The Unix Philosophy.**
 
 - **A Filter, Not a Framework**: `ask` behaves like `grep`, `awk`, or `curl`. You run a command, it streams the concise answer straight to standard output, and exits immediately. Your prompt is ready for the next task.
+- **Pure Code When You Need Code**: Generates raw, syntactically valid code starting directly with shebangs or declarations—zero conversational preambles, zero markdown code fences, and zero alien ASCII title banners breaking your scripts.
 - **Session-Scoped by Design**: Memory is strictly scoped to the parent shell process (PPID). Two terminal tabs or tmux panes on the same machine never contaminate each other's context. Your Kubernetes debugging in Tab 1 never bleeds into your Terraform work in Tab 2.
 - **Auto-Compacting, Not Discarding**: Rather than dropping context abruptly with an arbitrary timer, long multi-turn sessions automatically roll into concise summaries behind the scenes. Zero latency overhead, zero token window blowouts.
 - **Terminal-Native Plain Text**: Outputs clean, readable plain text with ASCII underlines and clean indentation—no unrendered web markdown fences or raw hash symbols cluttering your terminal.
@@ -36,6 +37,8 @@ They trap you in bloated full-screen TUIs, demand heavy runtimes, spawn autonomo
 ## Features
 
 - ⚡ **Instant Execution**: Native standalone binary. Starts immediately with near-zero latency.
+- 💻 **Pure Code Generation (`--cg`, `--codegen`)**: Output exact, runnable code or scripts without title headers or markdown fences.
+- 🤖 **Smart Codegen Auto-Detection**: Automatically activates codegen mode when saving to script/code files (`.sh`, `.py`, `.pbs`, `.yaml`, etc.) or piping existing scripts.
 - 💬 **Continuous Chatbot Mode**: Run `ask -i` or `ask --chatbot` for persistent conversational interaction with in-session model switching.
 - 📁 **Direct File Output**: Save responses directly using `ask -o <file>` (overwrite) or `ask -a <file>` (append).
 - 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`).
@@ -96,11 +99,28 @@ ask "explain how to configure a systemd service"
 ask what does the -F flag do in awk
 ```
 
-### 2. Continuous Chatbot Mode (`ask -i`, `ask --chatbot`)
+### 2. Pure Code Generation Mode (`--cg`, `--codegen`)
+When generating or refactoring scripts, configs, or code, use `--cg` to ensure the output contains strictly raw, executable code without any title headers, ASCII underlines, conversational filler, or markdown code fences:
+```bash
+# Explicit code generation
+ask --cg "write a python function to compute fibonacci"
+
+# Generate a PBS batch script directly to file (auto-activates codegen)
+ask -o job.pbs "generate a pbs script template"
+
+# Refactor an existing script via pipe without unwanted alien headers
+cat job.pbs | ask "remove alien lines and request 2 nodes with 64gb memory" > job2.pbs
+```
+`ask` automatically detects code generation intent when:
+- The `--cg` or `--codegen` flag is supplied.
+- Outputting to code/script extensions (`.sh`, `.py`, `.pbs`, `.slurm`, `.yaml`, `.json`, etc.) with `-o` or `-a`.
+- The input stream starts with a shebang (`#!/`) or contains script keywords.
+
+### 3. Continuous Chatbot Mode (`ask -i`, `ask --chatbot`)
 When you want an uninterrupted back-and-forth dialogue without exiting to the shell between each turn:
 ```bash
 $ ask -i
-ask v0.3.3 — Continuous Chat Mode
+ask v0.3.4 — Continuous Chat Mode
 Model: nvidia/nemotron-3.5-lightning:free | Session: session-12345
 Type message (Enter for newline, Ctrl+Enter or blank Enter to send). Commands: /clear, /model, exit
 
@@ -134,7 +154,7 @@ Inside chatbot mode:
 - `/help`: Display in-chat help.
 - `exit`, `quit`, or `Ctrl+C`: Exit chatbot mode.
 
-### 3. Direct File Output (`-o`, `-a`)
+### 4. Direct File Output (`-o`, `-a`)
 Save answers directly to files without worrying about shell pipe syntax:
 ```bash
 # Overwrite or create file
@@ -145,7 +165,7 @@ ask -a docker_setup.md "now add healthchecks for both services"
 ```
 The terminal displays live progress (`[saving to docker_setup.md...]` -> `[saved to docker_setup.md]`), keeping the output clean and uncorrupted.
 
-### 4. Interactive Multiline Entry
+### 5. Interactive Multiline Entry
 Simply run `ask` with no prompt arguments to paste or type multiline scripts, configs, or queries:
 ```bash
 $ ask
@@ -156,7 +176,7 @@ explain what this pipeline does
 # Press Enter on a blank line (or Ctrl+Enter) to submit
 ```
 
-### 5. Literal Command Flags (Preserving Option Flags)
+### 6. Literal Command Flags (Preserving Option Flags)
 `ask` recognizes that commands often contain their own flags. Unrecognized flags are preserved as prompt text:
 ```bash
 ask ps -eo pid,cmd --sort
@@ -164,7 +184,7 @@ ask tar -czvf archive.tar.gz
 ask gcc -o main main.c
 ```
 
-### 6. Standard Redirection & Stderr Progress
+### 7. Standard Redirection & Stderr Progress
 When redirecting standard output to a file or downstream command, `ask` keeps you informed on `stderr` so your terminal never looks frozen:
 ```bash
 $ ask "summarize kubernetes cgroups" >> notes.txt
@@ -174,7 +194,7 @@ $ ask "summarize kubernetes cgroups" >> notes.txt
 ```
 The redirected file receives pure, clean plain text without any escape sequences or status lines.
 
-### 7. Flag Disambiguation & The `--` Separator
+### 8. Flag Disambiguation & The `--` Separator
 - **Standalone Tool Actions**: Flags like `--config`, `--help`, `--version`, `--clear`, and `--update-self` only trigger tool actions when entered **alone** (`ask --config`).
 - **If Extra Arguments Are Present**: If you type `ask --config ps --help`, `ask` treats it as a **question** for the AI, rather than dumping your settings.
 - **The Absolute Escape Hatch (`--`)**: If you want to guarantee that zero tokens are interpreted as `ask` options, use standard POSIX `--`:
@@ -185,7 +205,7 @@ The redirected file receives pure, clean plain text without any escape sequences
   ```
   Everything following `--` is treated strictly as literal prompt text.
 
-### 8. Conversational Follow-ups (Scoped to Active Shell)
+### 9. Conversational Follow-ups (Scoped to Active Shell)
 Context is remembered within the **same terminal tab**:
 ```bash
 $ ask "how to check listening ports with ss?"
@@ -195,7 +215,7 @@ $ ask "filter only tcp sockets"
 ss -tulpn | grep tcp
 ```
 
-### 9. Standard Input Piping
+### 10. Standard Input Piping
 Feed file outputs, diffs, or logs directly into `ask`:
 ```bash
 # Debug system logs
@@ -208,7 +228,7 @@ git diff | ask "review this diff for potential performance regressions"
 netstat -tulpn | ask "which ports are exposed publicly?"
 ```
 
-### 10. Session Controls
+### 11. Session Controls
 ```bash
 # Clear conversation history for the current terminal window
 ask --clear   # or ask -c
@@ -217,7 +237,7 @@ ask --clear   # or ask -c
 ask --no-context "what is the default ssh port?"
 ```
 
-### 11. Switching Models
+### 12. Switching Models
 By default, `ask` uses top-performing free models like `nvidia/nemotron-3.5-lightning:free`. You can switch to any free or paid model on OpenRouter:
 ```bash
 # Check current config & active session

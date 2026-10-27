@@ -151,7 +151,12 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		}
 
 		var apiMessages []Message
-		apiMessages = append(apiMessages, Message{Role: "system", Content: systemPrompt})
+		activePrompt := systemPrompt
+		if chatQueryOpts.IsCodeGen {
+			activePrompt = codePrompt
+		}
+		apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
+
 		if len(session.Messages) > 0 {
 			compacted := compactHistory(session.Messages)
 			apiMessages = append(apiMessages, compacted...)

@@ -16,7 +16,8 @@ import (
 const (
 	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModel  = "nvidia/nemotron-3.5-lightning:free"
-	systemPrompt  = "You are a concise, helpful terminal CLI assistant. Output strictly clean, human-readable PLAIN TEXT designed for standard terminal displays. DO NOT use markdown formatting (no # headers, no **bold**, no triple backticks ``` for code fences). Instead, use clear uppercase section titles, ASCII underlines (--- or ===), simple indentation (2 to 4 spaces) for code or commands, and clean hyphen (-) bullet points. Provide direct, succinct answers without unnecessary pleasantries or verbose commentary."
+	systemPrompt  = "You are a concise, helpful terminal CLI assistant. Output strictly clean, human-readable PLAIN TEXT designed for standard terminal displays. DO NOT use markdown formatting (no # headers, no **bold**, no triple backticks ``` for code fences). When explaining concepts, you may use clear uppercase section titles, ASCII underlines (--- or ===), simple indentation, and hyphen (-) bullet points. When providing or editing code, scripts, or configurations, DO NOT add artificial title banners or ASCII underlines—output the code cleanly."
+	codePrompt    = "You are a direct code generation engine. You must output ONLY valid, executable, raw code, script, or configuration text. DO NOT include any conversational introduction, English commentary, concluding notes, markdown headers (#), ASCII section titles, or markdown backtick code blocks (```). All comments must be native code comments (e.g. # or //) within the script itself. Start immediately with the first character of code or shebang and end with the last line of code."
 )
 
 type ChatRequest struct {
@@ -44,6 +45,7 @@ type StreamResponse struct {
 type QueryOptions struct {
 	OutputFile       string
 	AppendFile       string
+	IsCodeGen        bool
 	IsStdoutTerminal bool
 	IsStderrTerminal bool
 }
@@ -71,6 +73,19 @@ func isCharDevice(f *os.File) bool {
 		return false
 	}
 	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+func stripMarkdownFences(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if idx := strings.Index(s, "\n"); idx != -1 {
+			s = strings.TrimSpace(s[idx+1:])
+		}
+	}
+	if strings.HasSuffix(s, "```") {
+		s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
+	}
+	return s
 }
 
 func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts QueryOptions) (string, error) {
@@ -159,6 +174,26 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts 
 	clearedStatus := false
 	var fullResponseBuilder strings.Builder
 
+	// Fence stripping state for codegen mode
+	headerChecked := false
+	var headerBuf strings.Builder
+
+	writeChunk := func(chunk string) {
+		if chunk == "" {
+			return
+		}
+		if targetFile != nil {
+			_, _ = targetFile.WriteString(chunk)
+		} else {
+			if !hasOutput && !opts.IsCodeGen {
+				printSplitter(cfg.Model, opts.IsStdoutTerminal)
+			}
+			fmt.Print(chunk)
+		}
+		fullResponseBuilder.WriteString(chunk)
+		hasOutput = true
+	}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
@@ -196,22 +231,38 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts 
 						clearedStatus = true
 					}
 
-					if targetFile != nil {
-						// Write chunk directly to file
-						_, _ = targetFile.WriteString(chunk)
-					} else {
-						// Print chunk to stdout
-						if !hasOutput {
-							printSplitter(cfg.Model, opts.IsStdoutTerminal)
+					if opts.IsCodeGen && !headerChecked {
+						headerBuf.WriteString(chunk)
+						text := headerBuf.String()
+						if strings.Contains(text, "\n") {
+							headerChecked = true
+							// Check if the first line is a code fence like ```python or ```
+							lines := strings.SplitN(text, "\n", 2)
+							firstLine := strings.TrimSpace(lines[0])
+							remainder := lines[1]
+							if strings.HasPrefix(firstLine, "```") {
+								// Drop the opening code fence
+								writeChunk(remainder)
+							} else {
+								// First line is code, write entire buffer
+								writeChunk(text)
+							}
 						}
-						fmt.Print(chunk)
+					} else {
+						writeChunk(chunk)
 					}
-
-					fullResponseBuilder.WriteString(chunk)
-					hasOutput = true
 				}
 			}
 		}
+	}
+
+	// Flush any remaining header buffer if no newline was ever seen
+	if opts.IsCodeGen && !headerChecked && headerBuf.Len() > 0 {
+		text := headerBuf.String()
+		if strings.HasPrefix(strings.TrimSpace(text), "```") {
+			text = stripMarkdownFences(text)
+		}
+		writeChunk(text)
 	}
 
 	if opts.IsStderrTerminal && !clearedStatus {
@@ -238,5 +289,10 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts 
 		}
 	}
 
-	return fullResponseBuilder.String(), nil
+	finalResponse := fullResponseBuilder.String()
+	if opts.IsCodeGen {
+		finalResponse = stripMarkdownFences(finalResponse)
+	}
+
+	return finalResponse, nil
 }
