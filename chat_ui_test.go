@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,11 +81,30 @@ func TestChatUIBasicsAndDeadlockFree(t *testing.T) {
 	selected := chat.FinishSelection()
 	_ = selected
 
-	// Test Ctrl+C with selection active (must not deadlock!)
+	// Populate a turn in history for selection tests
+	chat.Turns = append(chat.Turns, ChatTurn{Role: "assistant", Content: "line one\nline two"})
+	chat.rebuildReversedLines()
+
+	// Test Ctrl+X with selection active (copies selection, does not quit)
 	chat.Selecting = true
-	chat.SelStartR = 0
+	chat.SelStartR = 1 // line one
 	chat.SelStartC = 0
-	chat.SelEndR = 0
-	chat.SelEndC = 5
-	chat.HandleKey([]byte{3}) // Ctrl+C
+	chat.SelEndR = 2 // line two
+	chat.SelEndC = 8
+	shouldExit := chat.HandleKey([]byte{0x18}) // Ctrl+X
+	if shouldExit {
+		t.Fatal("Ctrl+X should not exit")
+	}
+
+	// Verify \n included in multiline selection
+	text := chat.GetSelectedText()
+	if !strings.Contains(text, "\n") {
+		t.Fatalf("expected multiline selection to contain newline, got: %q", text)
+	}
+
+	// Test Ctrl+C quits when not streaming
+	shouldExit = chat.HandleKey([]byte{0x03}) // Ctrl+C
+	if !shouldExit {
+		t.Fatal("Ctrl+C should signal exit when not streaming")
+	}
 }

@@ -226,7 +226,7 @@ func (ui *ChatUI) RenderRow(r int) string {
 	if r == dividerRow {
 		title := "─── History (Down Arrow to Browse) "
 		if ui.ActiveRegion == RegionHistory {
-			title = "──● History [Browsing / Ctrl+C to Copy] "
+			title = "──● History [Browsing / Ctrl+X to Copy] "
 		}
 		rem := ui.Width - len([]rune(title))
 		if rem < 0 {
@@ -344,7 +344,7 @@ func (ui *ChatUI) getSelectedTextLocked() string {
 		if start <= end && start < len(runes) {
 			sb.WriteString(string(runes[start : end+1]))
 		}
-		if r < eR {
+		if r < eR || (eC >= len(runes) && len(runes) > 0) {
 			sb.WriteString("\n")
 		}
 	}
@@ -493,22 +493,25 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		}
 	}
 
-	// 2. Ctrl+C: Copy selection if active, cancel generation if streaming, else quit
+	// 2. Ctrl+C: Cancel generation if streaming, else quit
 	if len(inBuf) == 1 && inBuf[0] == 3 {
-		if ui.Selecting {
-			selected := ui.getSelectedTextLocked()
-			if selected != "" {
-				copyToClipboard(selected)
-			}
-			ui.Selecting = false
-			return false
-		}
 		if ui.IsStreaming && ui.ActiveCancel != nil {
 			ui.ActiveCancel()
 			ui.ActiveCancel = nil
 			return false
 		}
 		return true
+	}
+
+	// 2b. Ctrl+X: Copy active selection to clipboard
+	if len(inBuf) == 1 && inBuf[0] == 24 {
+		if ui.Selecting {
+			selected := ui.getSelectedTextLocked()
+			if selected != "" {
+				copyToClipboard(selected)
+			}
+			return false
+		}
 	}
 
 	// 3. Arrow Keys: Up, Down, Left, Right

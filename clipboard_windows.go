@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -25,7 +26,11 @@ const (
 )
 
 func copyNativeClipboard(text string) {
-	utf16, err := syscall.UTF16FromString(text)
+	// Standard Windows clipboard CF_UNICODETEXT requires CRLF (\r\n) line breaks
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\n", "\r\n")
+
+	utf16, err := syscall.UTF16FromString(normalized)
 	if err != nil {
 		return
 	}

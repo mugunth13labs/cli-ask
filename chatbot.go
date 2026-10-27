@@ -214,11 +214,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 						chat.HandleDrag(col, row, curW)
 						render()
 						continue
-					} else if isRelease { // Mouse Release
-						selected := chat.FinishSelection()
-						if selected != "" {
-							copyToClipboard(selected)
-						}
+					} else if isRelease { // Mouse Release: keep selection active without auto-copying
 						render()
 						continue
 					}

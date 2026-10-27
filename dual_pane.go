@@ -119,7 +119,7 @@ func (dp *DualPaneWorkspace) Render() {
 		rightPill = "\x1b[7m\x1b[1m [ 2: Terminal ] \x1b[0m"
 	}
 
-	hint := "Ctrl+T: Switch | Enter: Newline | Ctrl+Enter: Send | Down: History "
+	hint := "Ctrl+T: Switch | Ctrl+Enter: Send | Ctrl+X: Copy | Ctrl+C: Cancel "
 	tabsLine := leftPill + " │ " + rightPill
 	visibleTabLen := 24 + 3 + 19
 	remaining := w - visibleTabLen - len(hint)
@@ -190,6 +190,23 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 		}
 		inBuf = filtered
 		if len(inBuf) == 0 {
+			return false
+		}
+	}
+
+	// 1b. Universal Copy: Ctrl+X (0x18)
+	if bytes.Contains(inBuf, []byte{0x18}) {
+		if dp.ActivePane == PaneLeft && dp.Chat.Selecting {
+			selected := dp.Chat.GetSelectedText()
+			if selected != "" {
+				copyToClipboard(selected)
+			}
+			return false
+		} else if dp.ActivePane == PaneRight && dp.RightVT.HasSelection {
+			selected := dp.RightVT.GetSelectedText()
+			if selected != "" {
+				copyToClipboard(selected)
+			}
 			return false
 		}
 	}
@@ -273,19 +290,8 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 					}
 				}
 
-				// Mouse Release (m)
+				// Mouse Release (m): Maintain selection highlight; do not auto-copy
 				if isRelease {
-					if dp.ActivePane == PaneLeft && dp.Chat.Selecting {
-						selected := dp.Chat.FinishSelection()
-						if selected != "" {
-							copyToClipboard(selected)
-						}
-					} else if dp.ActivePane == PaneRight && dp.RightSelecting {
-						selected := dp.RightVT.GetSelectedText()
-						if selected != "" {
-							copyToClipboard(selected)
-						}
-					}
 					return false
 				}
 			}
