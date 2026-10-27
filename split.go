@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -26,6 +27,8 @@ func tryLaunchSplitSession(parsed *ParsedArgs) (bool, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "ask"
+	} else if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
 	}
 
 	askCmd := fmt.Sprintf("ASK_IN_SPLIT=1 %s -i", shellQuote(exe))
@@ -46,6 +49,7 @@ func tryLaunchSplitSession(parsed *ParsedArgs) (bool, error) {
 
 		// Bind Ctrl+T to toggle between panes in tmux
 		_ = exec.Command("tmux", "bind-key", "-n", "C-t", "select-pane", "-t", ":.+").Run()
+		_ = exec.Command("tmux", "select-pane", "-L").Run()
 
 		fmt.Println("[Split pane opened on left. Press Ctrl+T to toggle between terminal and ask | Type /exit to close]")
 		return true, nil
@@ -82,13 +86,25 @@ func tryLaunchSplitSession(parsed *ParsedArgs) (bool, error) {
 
 	// 4. Outside tmux, but tmux is installed on Linux/macOS
 	if tmuxPath, err := exec.LookPath("tmux"); err == nil {
-		fmt.Println("Launching ask in a new side-by-side tmux session...")
-		cmd := exec.Command(tmuxPath, "new-session", "-s", "ask-workspace", askCmd, "\\;", "split-window", "-h", "-p", "50", "\\;", "bind-key", "-n", "C-t", "select-pane", "-t", ":.+", "\\;", "select-pane", "-L")
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err == nil {
-			return true, nil
+		sessionName := fmt.Sprintf("ask-%d", os.Getpid())
+
+		// Create detached session running ask
+		if err := exec.Command(tmuxPath, "new-session", "-d", "-s", sessionName, askCmd).Run(); err == nil {
+			// Split window horizontally with shell on the right
+			_ = exec.Command(tmuxPath, "split-window", "-t", sessionName, "-h", "-p", "50").Run()
+			// Bind Ctrl+T to toggle between panes
+			_ = exec.Command(tmuxPath, "bind-key", "-n", "C-t", "select-pane", "-t", ":.+").Run()
+			// Select left pane (ask)
+			_ = exec.Command(tmuxPath, "select-pane", "-t", sessionName+":0.0").Run()
+
+			// Attach to session
+			attachCmd := exec.Command(tmuxPath, "attach-session", "-t", sessionName)
+			attachCmd.Stdin = os.Stdin
+			attachCmd.Stdout = os.Stdout
+			attachCmd.Stderr = os.Stderr
+			if err := attachCmd.Run(); err == nil {
+				return true, nil
+			}
 		}
 	}
 
