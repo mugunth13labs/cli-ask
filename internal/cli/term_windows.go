@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -15,13 +16,16 @@ var (
 )
 
 const (
-	enableLineInput       = 0x0002
-	enableEchoInput       = 0x0004
-	enableProcessedInput  = 0x0001
-	enableVirtualTerminal = 0x0200
+	enableProcessedInput            = 0x0001
+	enableLineInput                 = 0x0002
+	enableEchoInput                 = 0x0004
+	enableVirtualTerminalInput      = 0x0200
+	enableProcessedOutput           = 0x0001
+	enableVirtualTerminalProcessing = 0x0004
 )
 
 type TermState struct {
+	fd   uintptr
 	mode uint32
 }
 
@@ -43,19 +47,52 @@ type consoleScreenBufferInfo struct {
 	MaximumWindowSize coord
 }
 
-func makeRaw(fd uintptr) (*TermState, error) {
+func enableVT(fd uintptr) {
 	var mode uint32
-	r1, _, err := procGetConsoleMode.Call(fd, uintptr(unsafe.Pointer(&mode)))
-	if r1 == 0 {
-		return nil, err
+	r1, _, _ := procGetConsoleMode.Call(fd, uintptr(unsafe.Pointer(&mode)))
+	if r1 != 0 {
+		_, _, _ = procSetConsoleMode.Call(fd, uintptr(mode|enableProcessedOutput|enableVirtualTerminalProcessing))
 	}
-	state := &TermState{mode: mode}
-	// Disable line input and echo, enable virtual terminal processing
-	rawMode := (mode &^ (enableLineInput | enableEchoInput)) | enableVirtualTerminal | enableProcessedInput
-	r1, _, err = procSetConsoleMode.Call(fd, uintptr(rawMode))
+}
+
+func makeRaw(fd uintptr) (*TermState, error) {
+	// Console input raw mode must be set on an input buffer handle (stdin)
+	targetFd := fd
+	var mode uint32
+	r1, _, err := procGetConsoleMode.Call(targetFd, uintptr(unsafe.Pointer(&mode)))
 	if r1 == 0 {
-		return nil, err
+		// If fd is not an input handle (e.g. stdout was passed), try stdin
+		targetFd = os.Stdin.Fd()
+		r1, _, err = procGetConsoleMode.Call(targetFd, uintptr(unsafe.Pointer(&mode)))
+		if r1 == 0 {
+			return nil, err
+		}
 	}
+
+	state := &TermState{fd: targetFd, mode: mode}
+
+	// Disable line input and echo, enable virtual terminal processing on input
+	rawMode := (mode &^ (enableLineInput | enableEchoInput)) | enableVirtualTerminalInput | enableProcessedInput
+	r1, _, err = procSetConsoleMode.Call(targetFd, uintptr(rawMode))
+	if r1 == 0 {
+		// If setting input mode failed, try targetFd = os.Stdin.Fd()
+		if targetFd != os.Stdin.Fd() {
+			targetFd = os.Stdin.Fd()
+			r1, _, err = procGetConsoleMode.Call(targetFd, uintptr(unsafe.Pointer(&mode)))
+			if r1 != 0 {
+				state = &TermState{fd: targetFd, mode: mode}
+				rawMode = (mode &^ (enableLineInput | enableEchoInput)) | enableVirtualTerminalInput | enableProcessedInput
+				r1, _, err = procSetConsoleMode.Call(targetFd, uintptr(rawMode))
+			}
+		}
+		if r1 == 0 {
+			return nil, err
+		}
+	}
+
+	// Ensure stdout has Virtual Terminal Processing enabled for ANSI escape sequences
+	enableVT(os.Stdout.Fd())
+
 	return state, nil
 }
 
@@ -63,7 +100,11 @@ func restoreTerm(fd uintptr, state *TermState) error {
 	if state == nil {
 		return nil
 	}
-	r1, _, err := procSetConsoleMode.Call(fd, uintptr(state.mode))
+	targetFd := state.fd
+	if targetFd == 0 {
+		targetFd = fd
+	}
+	r1, _, err := procSetConsoleMode.Call(targetFd, uintptr(state.mode))
 	if r1 == 0 {
 		return err
 	}
@@ -72,8 +113,14 @@ func restoreTerm(fd uintptr, state *TermState) error {
 
 func getTerminalSize(fd uintptr) (width, height int) {
 	var csbi consoleScreenBufferInfo
-	// Note: Console Screen Buffer Info should be queried from stdout
-	r1, _, _ := procGetConsoleScreenBufferInfo.Call(fd, uintptr(unsafe.Pointer(&csbi)))
+	// Console Screen Buffer Info MUST be queried from stdout or stderr (screen buffer handles)
+	targetFd := fd
+	r1, _, _ := procGetConsoleScreenBufferInfo.Call(targetFd, uintptr(unsafe.Pointer(&csbi)))
+	if r1 == 0 {
+		// If fd was stdin, query stdout instead!
+		targetFd = os.Stdout.Fd()
+		r1, _, _ = procGetConsoleScreenBufferInfo.Call(targetFd, uintptr(unsafe.Pointer(&csbi)))
+	}
 	if r1 != 0 {
 		w := int(csbi.Window.Right - csbi.Window.Left + 1)
 		h := int(csbi.Window.Bottom - csbi.Window.Top + 1)

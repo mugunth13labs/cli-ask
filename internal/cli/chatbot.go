@@ -142,13 +142,14 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 }
 
 func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) error {
-	fd := os.Stdout.Fd()
-	state, err := makeRaw(fd)
+	inFd := os.Stdin.Fd()
+	outFd := os.Stdout.Fd()
+	state, err := makeRaw(inFd)
 	if err != nil {
 		return fmt.Errorf("failed to make raw: %w", err)
 	}
 
-	w, h := getTerminalSize(fd)
+	w, h := getTerminalSize(outFd)
 	if w < 40 {
 		w = 80
 	}
@@ -178,7 +179,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_ = restoreTerm(fd, state)
+			_ = restoreTerm(inFd, state)
 			_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
 			_ = os.Stdout.Sync()
 		})
@@ -235,7 +236,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	defer ticker.Stop()
 
 	handleResize := func() {
-		newW, newH := getTerminalSize(fd)
+		newW, newH := getTerminalSize(outFd)
 		if newW > 0 && newH > 0 && (newW != curW || newH != curH) {
 			renderMu.Lock()
 			curW, curH = newW, newH

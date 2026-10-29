@@ -313,7 +313,7 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 	}()
 
 	renderBox := func() {
-		termW, _ := getTerminalSize(fd)
+		termW, _ := getTerminalSize(os.Stdout.Fd())
 		boxWidth := termW
 		if boxWidth <= 0 || boxWidth < 40 {
 			boxWidth = 80
