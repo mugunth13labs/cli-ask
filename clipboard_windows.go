@@ -58,3 +58,7 @@ func copyNativeClipboard(text string) {
 
 	procSetClipboardData.Call(cfUnicodeText, hMem)
 }
+
+func readNativeClipboard() string {
+	return ""
+}

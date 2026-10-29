@@ -20,3 +20,8 @@ func copyToClipboard(text string) {
 	// Platform specific native clipboard fallback
 	copyNativeClipboard(text)
 }
+
+// readClipboard retrieves text from the system clipboard
+func readClipboard() string {
+	return readNativeClipboard()
+}

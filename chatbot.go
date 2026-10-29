@@ -92,6 +92,46 @@ func readChatPrompt(reader *bufio.Reader, isInteractive bool) (string, error) {
 	return readChatPromptCooked(reader)
 }
 
+func renderStandaloneHeader(width int, confirmExit bool, exitChoice int) string {
+	if confirmExit {
+		prompt := " Exit ask chat?  "
+		yes := " [ Yes ] "
+		no := " [ No ] "
+		if exitChoice == 0 {
+			yes = "\x1b[30;47;1m Yes \x1b[0m\x1b[7;1m"
+			no = "  No  "
+		} else {
+			yes = "  Yes  "
+			no = "\x1b[30;47;1m No \x1b[0m\x1b[7;1m"
+		}
+		hints := " (←/→: Choose | Enter: Confirm | Esc: Cancel) "
+		text := prompt + yes + "  " + no + hints
+		rem := width - len([]rune(text))
+		if rem < 0 {
+			rem = 0
+		}
+		return "\x1b[7;1m" + text + strings.Repeat(" ", rem) + "\x1b[0m"
+	}
+
+	title := " ask chat"
+	hints := "Ctrl+Enter: Send | Ctrl+Shift+C/V: Copy/Paste | Ctrl+C: Cancel "
+	if width < 75 {
+		hints = "Ctrl+Enter: Send | Ctrl+C: Cancel "
+	}
+	if width < 50 {
+		hints = "Ctrl+Enter: Send "
+	}
+
+	titleRunes := len([]rune(title))
+	hintsRunes := len([]rune(hints))
+	rem := width - titleRunes - hintsRunes
+	if rem < 0 {
+		rem = 0
+		hints = ""
+	}
+	return "\x1b[7;1m" + title + strings.Repeat(" ", rem) + hints + "\x1b[0m"
+}
+
 func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) error {
 	fd := os.Stdout.Fd()
 	state, err := makeRaw(fd)
@@ -120,7 +160,11 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h")
 	_ = os.Stdout.Sync()
 
-	chat := NewChatUI(cfg, session, opts, initialPrompt, w, h)
+	contentH := h - 2
+	if contentH < 4 {
+		contentH = 4
+	}
+	chat := NewChatUI(cfg, session, opts, initialPrompt, w, contentH)
 
 	var cleanupOnce sync.Once
 	cleanup := func() {
@@ -134,18 +178,38 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 
 	var renderMu sync.Mutex
 	curW, curH := w, h
+	confirmExit := false
+	exitChoice := 0 // 0 = Yes, 1 = No
+
 	render := func() {
 		renderMu.Lock()
 		defer renderMu.Unlock()
 
 		var sb strings.Builder
 		sb.WriteString(ansiHideCursor)
-		for r := 0; r < curH; r++ {
-			sb.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[K", r+1))
+
+		// 1. Row 1: Header bar
+		sb.WriteString("\x1b[1;1H\x1b[K")
+		sb.WriteString(renderStandaloneHeader(curW, confirmExit, exitChoice))
+
+		// 2. Row 2: Divider line
+		sb.WriteString("\x1b[2;1H\x1b[K")
+		sb.WriteString("\x1b[90m" + strings.Repeat("─", curW) + "\x1b[0m")
+
+		// 3. Rows 3..curH: ChatUI rows
+		for r := 0; r < contentH; r++ {
+			sb.WriteString(fmt.Sprintf("\x1b[%d;1H\x1b[K", r+3))
 			sb.WriteString(chat.RenderRow(r))
 		}
+
+		// Cursor positioning
 		cRow, cCol := chat.CursorPosition()
-		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", cRow+1, cCol+1, ansiShowCursor))
+		screenRow := cRow + 3
+		screenCol := cCol + 1
+		if screenRow >= 3 && screenRow <= curH && screenCol >= 1 && screenCol <= curW && !confirmExit {
+			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", screenRow, screenCol, ansiShowCursor))
+		}
+
 		_, _ = os.Stdout.WriteString(sb.String())
 		_ = os.Stdout.Sync()
 	}
@@ -153,22 +217,46 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	chat.OnNeedRender = render
 	render()
 
-	// Resize poller
+	// Resize poller and SIGWINCH listener
 	isExiting := false
+	winchChan := make(chan os.Signal, 2)
+	notifyWinch(winchChan)
+
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
-	go func() {
-		for range ticker.C {
-			if isExiting {
-				return
+
+	handleResize := func() {
+		newW, newH := getTerminalSize(fd)
+		if newW > 0 && newH > 0 && (newW != curW || newH != curH) {
+			renderMu.Lock()
+			curW, curH = newW, newH
+			contentH = curH - 2
+			if contentH < 4 {
+				contentH = 4
 			}
-			newW, newH := getTerminalSize(fd)
-			if newW > 0 && newH > 0 && (newW != curW || newH != curH) {
-				renderMu.Lock()
-				curW, curH = newW, newH
-				chat.Resize(curW, curH)
-				renderMu.Unlock()
-				render()
+			chat.Resize(curW, contentH)
+			renderMu.Unlock()
+
+			// Clear screen to avoid ghost lines when zooming in/out
+			_, _ = os.Stdout.WriteString("\x1b[2J")
+			_ = os.Stdout.Sync()
+			render()
+		}
+	}
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if isExiting {
+					return
+				}
+				handleResize()
+			case <-winchChan:
+				if isExiting {
+					return
+				}
+				handleResize()
 			}
 		}
 	}()
@@ -195,7 +283,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 					x, _ := strconv.Atoi(parts[1])
 					y, _ := strconv.Atoi(parts[2])
 
-					row := y - 1 // 0-based content row in standalone mode
+					row := y - 3 // 0-based content row in standalone mode (rows 1 & 2 are header)
 					col := x - 1
 
 					if btn == 64 { // Wheel Up
@@ -206,11 +294,11 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 						chat.ScrollHistory(3)
 						render()
 						continue
-					} else if btn == 0 && !isRelease { // Left Click
+					} else if btn == 0 && !isRelease && row >= 0 { // Left Click in content
 						chat.HandleClick(col, row)
 						render()
 						continue
-					} else if btn == 32 && !isRelease { // Left Drag
+					} else if btn == 32 && !isRelease && row >= 0 { // Left Drag
 						chat.HandleDrag(col, row, curW)
 						render()
 						continue
@@ -220,6 +308,58 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 					}
 				}
 			}
+			continue
+		}
+
+		// Exit Confirmation Mode handling
+		if confirmExit {
+			// Left or Right arrow: toggle Yes / No
+			if bytes.Equal(inBuf, []byte("\x1b[D")) || bytes.Equal(inBuf, []byte("\x1b[C")) {
+				exitChoice = 1 - exitChoice
+				render()
+				continue
+			}
+			// Enter key: confirm choice
+			isEnter := (len(inBuf) == 1 && inBuf[0] == 13) || bytes.Equal(inBuf, []byte("\r\n"))
+			if isEnter {
+				if exitChoice == 0 {
+					// Confirmed Yes -> Exit
+					isExiting = true
+					return nil
+				}
+				// Confirmed No -> Cancel confirmation
+				confirmExit = false
+				render()
+				continue
+			}
+			// Esc key: cancel confirmation
+			if len(inBuf) == 1 && inBuf[0] == 27 {
+				confirmExit = false
+				render()
+				continue
+			}
+			// Ctrl+C: force exit immediately
+			if len(inBuf) == 1 && inBuf[0] == 3 {
+				isExiting = true
+				return nil
+			}
+			// Ignore other keys while in confirmation mode
+			continue
+		}
+
+		// When NOT in confirmExit:
+		// Intercept Ctrl+C (0x03)
+		if len(inBuf) == 1 && inBuf[0] == 3 {
+			if chat.IsStreaming && chat.ActiveCancel != nil {
+				chat.ActiveCancel()
+				chat.ActiveCancel = nil
+				render()
+				continue
+			}
+			// Prompt for exit!
+			confirmExit = true
+			exitChoice = 0 // default Yes
+			render()
 			continue
 		}
 

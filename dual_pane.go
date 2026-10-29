@@ -128,15 +128,15 @@ func (dp *DualPaneWorkspace) Render() {
 	divider := "\x1b[90m│\x1b[0m"
 
 	var rightTab string
-	hint := "Ctrl+T | Ctrl+X "
+	hint := "Ctrl+1/2 | Ctrl+X "
 	if rightWidth >= 55 {
-		hint = "Ctrl+T: Switch | Ctrl+X: Copy "
+		hint = "Ctrl+1/2: Tabs | Ctrl+Shift+C/V: Copy/Paste "
 	}
 	title := " [2] Terminal"
 	titleRunes := len([]rune(title))
 	remRight := rightWidth - titleRunes - len(hint)
 	if remRight < 1 {
-		hint = "Ctrl+T "
+		hint = "Ctrl+1/2 "
 		remRight = rightWidth - titleRunes - len(hint)
 	}
 	if remRight < 0 {
@@ -197,7 +197,34 @@ func (dp *DualPaneWorkspace) Render() {
 }
 
 func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
-	// 1. Universal Pane Toggle: Ctrl+T (0x14)
+	// 1. Pane Tab Switching:
+	// Ctrl+1: Focus PaneLeft (ask chat)
+	isCtrl1 := bytes.Equal(inBuf, []byte("\x1b[49;5u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;5;49~")) ||
+		bytes.Equal(inBuf, []byte("\x1b1")) // Alt+1 fallback
+
+	// Ctrl+2: Focus PaneRight (Terminal)
+	isCtrl2 := bytes.Equal(inBuf, []byte("\x1b[50;5u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;5;50~")) ||
+		(len(inBuf) == 1 && inBuf[0] == 0) || // Ctrl+2 classic NUL
+		bytes.Equal(inBuf, []byte("\x1b2")) // Alt+2 fallback
+
+	if isCtrl1 {
+		dp.mu.Lock()
+		dp.ActivePane = PaneLeft
+		dp.mu.Unlock()
+		dp.Render()
+		return false
+	}
+	if isCtrl2 {
+		dp.mu.Lock()
+		dp.ActivePane = PaneRight
+		dp.mu.Unlock()
+		dp.Render()
+		return false
+	}
+
+	// 1a. Universal Pane Toggle: Ctrl+T (0x14)
 	if bytes.Contains(inBuf, []byte{0x14}) {
 		dp.mu.Lock()
 		if dp.ActivePane == PaneLeft {
@@ -220,8 +247,14 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 		}
 	}
 
-	// 1b. Universal Copy: Ctrl+X (0x18)
-	if bytes.Contains(inBuf, []byte{0x18}) {
+	// 1b. Universal Copy: Ctrl+X (0x18) or Ctrl+Shift+C
+	isCopy := bytes.Contains(inBuf, []byte{0x18}) ||
+		bytes.Equal(inBuf, []byte("\x1b[67;6u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[99;6u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;67~")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;99~"))
+
+	if isCopy {
 		if dp.ActivePane == PaneLeft && dp.Chat.Selecting {
 			selected := dp.Chat.GetSelectedText()
 			if selected != "" {
@@ -407,31 +440,50 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 		close(rightDone)
 	}()
 
-	// Terminal resize watcher
+	// Terminal resize watcher with SIGWINCH and poller
+	winchChan := make(chan os.Signal, 2)
+	notifyWinch(winchChan)
+
 	resizeTicker := time.NewTicker(250 * time.Millisecond)
 	defer resizeTicker.Stop()
 
-	go func() {
-		for range resizeTicker.C {
-			if dp.IsExiting {
-				return
+	handleResize := func() {
+		w, h := getTerminalSize(fd)
+		if w > 0 && h > 0 && (w != dp.Width || h != dp.Height) {
+			dp.mu.Lock()
+			dp.Width = w
+			dp.Height = h
+			leftWidth := (w - 1) / 2
+			rightWidth := w - leftWidth - 1
+			contentHeight := h - 2
+			if contentHeight < 4 {
+				contentHeight = 4
 			}
-			w, h := getTerminalSize(fd)
-			if w > 0 && h > 0 && (w != dp.Width || h != dp.Height) {
-				dp.mu.Lock()
-				dp.Width = w
-				dp.Height = h
-				leftWidth := (w - 1) / 2
-				rightWidth := w - leftWidth - 1
-				contentHeight := h - 2
-				if contentHeight < 4 {
-					contentHeight = 4
+			dp.Chat.Resize(leftWidth, contentHeight)
+			dp.RightVT.Resize(contentHeight, rightWidth)
+			_ = dp.RightPTY.Resize(contentHeight, rightWidth)
+			dp.mu.Unlock()
+
+			// Clear entire screen to eliminate ghost rows/cols when zooming in/out
+			_, _ = os.Stdout.WriteString("\x1b[2J")
+			_ = os.Stdout.Sync()
+			dp.Render()
+		}
+	}
+
+	go func() {
+		for {
+			select {
+			case <-resizeTicker.C:
+				if dp.IsExiting {
+					return
 				}
-				dp.Chat.Resize(leftWidth, contentHeight)
-				dp.RightVT.Resize(contentHeight, rightWidth)
-				_ = dp.RightPTY.Resize(contentHeight, rightWidth)
-				dp.mu.Unlock()
-				dp.Render()
+				handleResize()
+			case <-winchChan:
+				if dp.IsExiting {
+					return
+				}
+				handleResize()
 			}
 		}
 	}()

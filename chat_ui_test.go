@@ -277,3 +277,83 @@ func TestPromptBoxSubtleTint(t *testing.T) {
 		t.Fatalf("expected prompt box row 0 to contain background tint \\x1b[48;5;236m, got: %q", row0)
 	}
 }
+
+func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
+	// Normal header
+	header := renderStandaloneHeader(80, false, 0)
+	if !strings.Contains(header, "ask chat") {
+		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
+	}
+	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "Ctrl+Shift+C/V") {
+		t.Fatalf("expected header to contain shortcuts, got: %q", header)
+	}
+
+	// Exit confirmation header: Yes selected
+	confYes := renderStandaloneHeader(80, true, 0)
+	if !strings.Contains(confYes, "Exit ask chat?") || !strings.Contains(confYes, "Yes") || !strings.Contains(confYes, "No") {
+		t.Fatalf("expected exit confirmation header, got: %q", confYes)
+	}
+
+	// Exit confirmation header: No selected
+	confNo := renderStandaloneHeader(80, true, 1)
+	if !strings.Contains(confNo, "Exit ask chat?") {
+		t.Fatalf("expected exit confirmation header, got: %q", confNo)
+	}
+}
+
+func TestDualPaneCtrl12TabSwitching(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	dp, err := NewDualPaneWorkspace(cfg, "", QueryOptions{})
+	if err != nil {
+		t.Fatalf("failed to create dual pane workspace: %v", err)
+	}
+	defer func() {
+		if dp.RightPTY != nil {
+			_ = dp.RightPTY.Close()
+		}
+	}()
+
+	// Starts at PaneLeft
+	if dp.ActivePane != PaneLeft {
+		t.Fatalf("expected initial PaneLeft, got: %v", dp.ActivePane)
+	}
+
+	// Send Ctrl+2 (CSI u)
+	dp.handleInput([]byte("\x1b[50;5u"))
+	if dp.ActivePane != PaneRight {
+		t.Fatalf("expected PaneRight after Ctrl+2, got: %v", dp.ActivePane)
+	}
+
+	// Send Ctrl+1 (CSI u)
+	dp.handleInput([]byte("\x1b[49;5u"))
+	if dp.ActivePane != PaneLeft {
+		t.Fatalf("expected PaneLeft after Ctrl+1, got: %v", dp.ActivePane)
+	}
+
+	// Send Ctrl+2 (Alt+2 fallback)
+	dp.handleInput([]byte("\x1b2"))
+	if dp.ActivePane != PaneRight {
+		t.Fatalf("expected PaneRight after Alt+2, got: %v", dp.ActivePane)
+	}
+}
+
+func TestChatUICtrlShiftCCopy(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 50, 15)
+
+	chat.Turns = append(chat.Turns, ChatTurn{Role: "assistant", Content: "copy test line"})
+	chat.rebuildReversedLines()
+
+	// Select text in history
+	chat.Selecting = true
+	chat.SelStartR = 0
+	chat.SelStartC = 0
+	chat.SelEndR = 0
+	chat.SelEndC = 10
+
+	// Send Ctrl+Shift+C (CSI u \x1b[67;6u)
+	shouldExit := chat.HandleKey([]byte("\x1b[67;6u"))
+	if shouldExit {
+		t.Fatal("Ctrl+Shift+C should not trigger exit")
+	}
+}

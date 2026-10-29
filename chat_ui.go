@@ -654,6 +654,31 @@ func (ui *ChatUI) insertNewline() {
 	ui.PromptCol = 0
 }
 
+func (ui *ChatUI) insertText(s string) {
+	inBuf := []byte(s)
+	i := 0
+	for i < len(inBuf) {
+		r, size := utf8.DecodeRune(inBuf[i:])
+		if r == '\r' {
+			if i+size < len(inBuf) && inBuf[i+size] == '\n' {
+				size++
+			}
+			ui.insertNewline()
+		} else if r == '\n' {
+			ui.insertNewline()
+		} else if r != utf8.RuneError && r >= 32 {
+			curLine := ui.PromptLines[ui.PromptRow]
+			runes := []rune(curLine)
+			if ui.PromptCol > len(runes) {
+				ui.PromptCol = len(runes)
+			}
+			ui.PromptLines[ui.PromptRow] = string(append(runes[:ui.PromptCol], append([]rune{r}, runes[ui.PromptCol:]...)...))
+			ui.PromptCol++
+		}
+		i += size
+	}
+}
+
 func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	// Guard against SGR mouse escape sequences reaching key handler
 	if bytes.HasPrefix(inBuf, []byte("\x1b[<")) {
@@ -705,13 +730,34 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		return true
 	}
 
-	// 2b. Ctrl+X: Copy active selection to clipboard
-	if len(inBuf) == 1 && inBuf[0] == 24 {
+	// 2b. Ctrl+X or Ctrl+Shift+C: Copy active selection to clipboard
+	isCopy := (len(inBuf) == 1 && inBuf[0] == 24) || // Ctrl+X
+		bytes.Equal(inBuf, []byte("\x1b[67;6u")) || // Ctrl+Shift+C (CSI u)
+		bytes.Equal(inBuf, []byte("\x1b[99;6u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;67~")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;99~"))
+
+	if isCopy {
 		if ui.Selecting {
 			selected := ui.getSelectedTextLocked()
 			if selected != "" {
 				copyToClipboard(selected)
 			}
+			return false
+		}
+	}
+
+	// 2c. Ctrl+Shift+V: Paste from clipboard into prompt box
+	isPaste := bytes.Equal(inBuf, []byte("\x1b[86;6u")) || // Ctrl+Shift+V (CSI u)
+		bytes.Equal(inBuf, []byte("\x1b[118;6u")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;86~")) ||
+		bytes.Equal(inBuf, []byte("\x1b[27;6;118~"))
+
+	if isPaste && ui.ActiveRegion == RegionPrompt {
+		clipText := readClipboard()
+		if clipText != "" {
+			ui.insertText(clipText)
+			ui.adjustPromptScroll()
 			return false
 		}
 	}
@@ -876,27 +922,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	}
 
 	// 8. Text insertion into prompt line (handles pasted text and newlines)
-	i := 0
-	for i < len(inBuf) {
-		r, size := utf8.DecodeRune(inBuf[i:])
-		if r == '\r' {
-			if i+size < len(inBuf) && inBuf[i+size] == '\n' {
-				size++
-			}
-			ui.insertNewline()
-		} else if r == '\n' {
-			ui.insertNewline()
-		} else if r != utf8.RuneError && r >= 32 {
-			curLine := ui.PromptLines[ui.PromptRow]
-			runes := []rune(curLine)
-			if ui.PromptCol > len(runes) {
-				ui.PromptCol = len(runes)
-			}
-			ui.PromptLines[ui.PromptRow] = string(append(runes[:ui.PromptCol], append([]rune{r}, runes[ui.PromptCol:]...)...))
-			ui.PromptCol++
-		}
-		i += size
-	}
+	ui.insertText(string(inBuf))
 	ui.adjustPromptScroll()
 	return false
 }
