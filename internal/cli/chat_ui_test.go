@@ -333,6 +333,7 @@ func TestDividerLineQuietInPromptAndKeybindingInHistory(t *testing.T) {
 }
 
 func TestSlashCommandHelpAndModel(t *testing.T) {
+	t.Setenv("ASK_CONFIG_DIR", t.TempDir())
 	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
 	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 60, 15)
 

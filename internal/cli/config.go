@@ -15,6 +15,9 @@ type Config struct {
 }
 
 func getConfigDir() (string, error) {
+	if custom := os.Getenv("ASK_CONFIG_DIR"); custom != "" {
+		return custom, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

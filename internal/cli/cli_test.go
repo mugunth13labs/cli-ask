@@ -525,7 +525,7 @@ func TestWrapText(t *testing.T) {
 func TestFormatInlineComposerBox(t *testing.T) {
 	ed := NewMicroEditor("", "")
 	ed.Lines = []string{"how do I check open ports in linux?", "preferably with ss"}
-	top, lines, bottom := formatInlineComposerBox(ed, 80, "")
+	top, lines, bottom, _, _ := formatInlineComposerBox(ed, 80, "")
 
 	if !strings.Contains(top, "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ]") {
 		t.Errorf("expected header in top border, got: %q", top)
@@ -543,7 +543,7 @@ func TestFormatInlineComposerBox(t *testing.T) {
 	}
 
 	// With target description
-	topTarget, _, _ := formatInlineComposerBox(ed, 80, "main.go")
+	topTarget, _, _, _, _ := formatInlineComposerBox(ed, 80, "main.go")
 	if !strings.Contains(topTarget, "Target: main.go") {
 		t.Errorf("expected Target: main.go in top border, got: %q", topTarget)
 	}

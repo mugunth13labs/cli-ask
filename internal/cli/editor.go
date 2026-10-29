@@ -226,9 +226,74 @@ func (e *MicroEditor) MoveDown() {
 	}
 }
 
+type visLine struct {
+	text      string
+	lineIdx   int
+	runeStart int
+	runeEnd   int
+}
+
+func getVisualLines(lines []string, maxContentWidth int) []visLine {
+	if maxContentWidth <= 10 {
+		maxContentWidth = 10
+	}
+	var res []visLine
+	for lIdx, l := range lines {
+		runes := []rune(l)
+		if len(runes) == 0 {
+			res = append(res, visLine{text: "", lineIdx: lIdx, runeStart: 0, runeEnd: 0})
+			continue
+		}
+		start := 0
+		for start < len(runes) {
+			end := start + maxContentWidth
+			if end > len(runes) {
+				end = len(runes)
+			}
+			res = append(res, visLine{
+				text:      string(runes[start:end]),
+				lineIdx:   lIdx,
+				runeStart: start,
+				runeEnd:   end,
+			})
+			start = end
+		}
+	}
+	return res
+}
+
+func getCursorVisPos(visLines []visLine, cursorRow, cursorCol int) (int, int) {
+	visRow := 0
+	visCol := 0
+	found := false
+
+	for i, vl := range visLines {
+		if vl.lineIdx == cursorRow {
+			if cursorCol >= vl.runeStart && cursorCol <= vl.runeEnd {
+				visRow = i
+				visCol = cursorCol - vl.runeStart
+				found = true
+				if cursorCol == vl.runeEnd && i+1 < len(visLines) && visLines[i+1].lineIdx == cursorRow {
+					visRow = i + 1
+					visCol = 0
+				}
+				break
+			}
+		}
+	}
+
+	if !found {
+		if len(visLines) > 0 {
+			visRow = len(visLines) - 1
+			visCol = len([]rune(visLines[visRow].text))
+		}
+	}
+	return visRow, visCol
+}
+
 // formatInlineComposerBox renders the framed box for the inline multiline prompt composer.
-func formatInlineComposerBox(editor *MicroEditor, boxWidth int, targetDesc string) (string, []string, string) {
-	if boxWidth <= 0 || boxWidth < 40 {
+func formatInlineComposerBox(editor *MicroEditor, boxWidth int, targetDesc string) (string, []string, string, int, int) {
+	if boxWidth <= 0 || boxWidth < 30 {
 		boxWidth = 80
 	}
 
@@ -243,20 +308,28 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, targetDesc strin
 	}
 	topBorder := fmt.Sprintf("\x1b[90m%s%s\x1b[0m", header, dashes)
 
-	contentLines := make([]string, 0, len(editor.Lines))
-	for _, line := range editor.Lines {
-		lineRunes := utf8.RuneCountInString(line)
-		padLen := boxWidth - 2 - lineRunes
+	maxTextWidth := boxWidth - 4
+	if maxTextWidth < 10 {
+		maxTextWidth = 10
+	}
+
+	visLines := getVisualLines(editor.Lines, maxTextWidth)
+	visRow, visCol := getCursorVisPos(visLines, editor.CursorRow, editor.CursorCol)
+
+	contentLines := make([]string, 0, len(visLines))
+	for _, vl := range visLines {
+		lineRunes := utf8.RuneCountInString(vl.text)
+		padLen := maxTextWidth - lineRunes
 		pad := ""
 		if padLen > 0 {
 			pad = strings.Repeat(" ", padLen)
 		}
-		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;236m  %s%s\x1b[0m", line, pad))
+		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;236m  %s%s  \x1b[0m", vl.text, pad))
 	}
 
 	bottomBorder := fmt.Sprintf("\x1b[90m%s\x1b[0m", strings.Repeat("─", boxWidth))
 
-	return topBorder, contentLines, bottomBorder
+	return topBorder, contentLines, bottomBorder, visRow, visCol
 }
 
 // runInlineComposer executes the micro-editor inline on stdout without entering the alternate screen buffer.
@@ -284,14 +357,14 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 	defer restore()
 
 	editor := NewMicroEditor("", "")
-	prevCursorRow := 0
+	prevCursorVisRow := 0
 	prevRendered := false
 
 	clearBox := func() {
 		if !prevRendered {
 			return
 		}
-		linesUp := prevCursorRow + 1
+		linesUp := prevCursorVisRow + 1
 		var b strings.Builder
 		if linesUp > 0 {
 			b.WriteString(fmt.Sprintf("\x1b[%dA", linesUp))
@@ -314,31 +387,34 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 
 	renderBox := func() {
 		termW, _ := getTerminalSize(os.Stdout.Fd())
-		boxWidth := termW
-		if boxWidth <= 0 || boxWidth < 40 {
-			boxWidth = 80
+		boxWidth := termW - 2
+		if boxWidth < 30 {
+			boxWidth = 30
+		}
+		if boxWidth > 100 {
+			boxWidth = 100
 		}
 
 		var b strings.Builder
 		b.WriteString(ansiHideCursor)
 
 		if prevRendered {
-			linesUp := prevCursorRow + 1
+			linesUp := prevCursorVisRow + 1
 			if linesUp > 0 {
 				b.WriteString(fmt.Sprintf("\x1b[%dA", linesUp))
 			}
 			b.WriteString("\r\x1b[J")
 		}
 
-		top, lines, bottom := formatInlineComposerBox(editor, boxWidth, targetDesc)
+		top, lines, bottom, visRow, visCol := formatInlineComposerBox(editor, boxWidth, targetDesc)
 		b.WriteString(top + "\r\n")
 		for _, l := range lines {
 			b.WriteString(l + "\r\n")
 		}
 		b.WriteString(bottom + "\r\n")
 
-		linesUp := len(editor.Lines) + 1 - editor.CursorRow
-		targetCol := 3 + editor.CursorCol
+		linesUp := len(lines) + 1 - visRow
+		targetCol := 3 + visCol
 		if targetCol > boxWidth {
 			targetCol = boxWidth
 		}
@@ -349,7 +425,7 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 		_, _ = os.Stdout.WriteString(b.String())
 		_ = os.Stdout.Sync()
 
-		prevCursorRow = editor.CursorRow
+		prevCursorVisRow = visRow
 		prevRendered = true
 	}
 

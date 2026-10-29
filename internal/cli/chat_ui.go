@@ -865,7 +865,10 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 				reply = fmt.Sprintf("Error: Model '%s' not found on OpenRouter. Keeping previous model: %s", newModel, ui.Config.Model)
 			} else {
 				ui.Config.Model = newModel
-				_ = saveConfig(ui.Config)
+				if existingCfg, err := loadConfig(); err == nil {
+					existingCfg.Model = newModel
+					_ = saveConfig(existingCfg)
+				}
 				reply = fmt.Sprintf("Model switched to: %s", newModel)
 			}
 		}
