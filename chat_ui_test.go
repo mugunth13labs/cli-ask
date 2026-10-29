@@ -279,25 +279,83 @@ func TestPromptBoxSubtleTint(t *testing.T) {
 }
 
 func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
-	// Normal header
-	header := renderStandaloneHeader(80, false, 0)
+	// Normal prompt header: shows slash hints
+	header := renderStandaloneHeader(100, false, 0, nil)
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "Ctrl+X") {
-		t.Fatalf("expected header to contain shortcuts, got: %q", header)
+	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "/help /clear /model /exit") {
+		t.Fatalf("expected header to contain slash command hints, got: %q", header)
 	}
 
 	// Exit confirmation header: Yes selected
-	confYes := renderStandaloneHeader(80, true, 0)
+	confYes := renderStandaloneHeader(80, true, 0, nil)
 	if !strings.Contains(confYes, "Exit ask chat?") || !strings.Contains(confYes, "Yes") || !strings.Contains(confYes, "No") {
 		t.Fatalf("expected exit confirmation header, got: %q", confYes)
 	}
 
 	// Exit confirmation header: No selected
-	confNo := renderStandaloneHeader(80, true, 1)
+	confNo := renderStandaloneHeader(80, true, 1, nil)
 	if !strings.Contains(confNo, "Exit ask chat?") {
 		t.Fatalf("expected exit confirmation header, got: %q", confNo)
+	}
+}
+
+func TestDividerLineQuietInPromptAndKeybindingInHistory(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "hello", 60, 15)
+
+	dividerRow := chat.PromptVisibleLines()
+	renderedDivider := chat.RenderRow(dividerRow)
+
+	// In Prompt mode: quiet divider line, no loud hints
+	if strings.Contains(renderedDivider, "Down Arrow to Browse") || strings.Contains(renderedDivider, "Ctrl+X to Copy") {
+		t.Fatalf("expected quiet divider line in prompt mode, got: %q", renderedDivider)
+	}
+	if !strings.Contains(renderedDivider, "─ history") {
+		t.Fatalf("expected minimal '─ history' indicator, got: %q", renderedDivider)
+	}
+
+	// In History mode (not selecting): shows navigation hint on divider line
+	chat.ActiveRegion = RegionHistory
+	chat.Selecting = false
+	renderedInHist := chat.RenderRow(dividerRow)
+	if !strings.Contains(renderedInHist, "↑ to prompt") || !strings.Contains(renderedInHist, "Shift+Arrow: select") {
+		t.Fatalf("expected navigation hint on divider line in history mode, got: %q", renderedInHist)
+	}
+
+	// In History mode (selecting): shows copy hint on divider line
+	chat.Selecting = true
+	renderedSelecting := chat.RenderRow(dividerRow)
+	if !strings.Contains(renderedSelecting, "y/Enter: copy") {
+		t.Fatalf("expected copy hint on divider line when selecting, got: %q", renderedSelecting)
+	}
+}
+
+func TestSlashCommandHelpAndModel(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 60, 15)
+
+	// Test /help
+	chat.PromptLines = []string{"/help"}
+	chat.submitPrompt()
+	if len(chat.Turns) < 2 {
+		t.Fatalf("expected user and assistant turns after /help, got: %d", len(chat.Turns))
+	}
+	helpTurn := chat.Turns[len(chat.Turns)-1]
+	if !strings.Contains(helpTurn.Content, "/model <name>") || !strings.Contains(helpTurn.Content, "/clear") {
+		t.Fatalf("unexpected help turn content: %q", helpTurn.Content)
+	}
+
+	// Test /model switch
+	chat.PromptLines = []string{"/model claude-3-opus"}
+	chat.submitPrompt()
+	if chat.Config.Model != "claude-3-opus" {
+		t.Fatalf("expected model to switch to claude-3-opus, got: %s", chat.Config.Model)
+	}
+	modelTurn := chat.Turns[len(chat.Turns)-1]
+	if !strings.Contains(modelTurn.Content, "Model switched to: claude-3-opus") {
+		t.Fatalf("unexpected model turn content: %q", modelTurn.Content)
 	}
 }
 

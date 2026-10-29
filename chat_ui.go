@@ -390,18 +390,21 @@ func (ui *ChatUI) RenderRow(r int) string {
 
 	// 2. Divider Row between Prompt Box and Reversed History
 	if r == dividerRow {
-		title := "─── History (Down Arrow to Browse) "
+		title := "─ history "
 		if ui.ActiveRegion == RegionHistory {
-			title = "──● History [Browsing / Ctrl+X to Copy] "
-			rem := ui.Width - len([]rune(title))
-			if rem < 0 {
-				rem = 0
+			if ui.Selecting {
+				title = "─ history [ y/Enter: copy | Esc: clear ] "
+			} else {
+				title = "─ history [ ↑ to prompt | Shift+Arrow: select ] "
 			}
-			return "\x1b[7;1m" + title + strings.Repeat("─", rem) + "\x1b[0m"
 		}
 		rem := ui.Width - len([]rune(title))
 		if rem < 0 {
-			rem = 0
+			title = "─ history "
+			rem = ui.Width - len([]rune(title))
+			if rem < 0 {
+				rem = 0
+			}
 		}
 		return "\x1b[90m" + title + strings.Repeat("─", rem) + "\x1b[0m"
 	}
@@ -820,6 +823,47 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 	}
 	if fullPrompt == "/exit" || fullPrompt == "/quit" || fullPrompt == "/q" {
 		return true
+	}
+	if fullPrompt == "/help" || fullPrompt == "/?" {
+		ui.PromptLines = []string{""}
+		ui.PromptRow = 0
+		ui.PromptCol = 0
+		ui.PromptScroll = 0
+		helpContent := "ask chat commands:\n" +
+			"  /clear, /c         Clear chat history & session context\n" +
+			"  /model <name>      Switch AI model on the fly (or view current)\n" +
+			"  /help, /?          Show this help message\n" +
+			"  /exit, /quit, /q   Exit ask chat"
+		nowTs := time.Now().Format("15:04:05")
+		ui.Turns = append(ui.Turns,
+			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
+			ChatTurn{Role: "assistant", Content: helpContent, Timestamp: nowTs},
+		)
+		ui.rebuildReversedLines()
+		return false
+	}
+	if strings.HasPrefix(fullPrompt, "/model") {
+		parts := strings.Fields(fullPrompt)
+		nowTs := time.Now().Format("15:04:05")
+		ui.PromptLines = []string{""}
+		ui.PromptRow = 0
+		ui.PromptCol = 0
+		ui.PromptScroll = 0
+
+		var reply string
+		if len(parts) == 1 {
+			reply = fmt.Sprintf("Current model: %s", ui.Config.Model)
+		} else {
+			newModel := parts[1]
+			ui.Config.Model = newModel
+			reply = fmt.Sprintf("Model switched to: %s", newModel)
+		}
+		ui.Turns = append(ui.Turns,
+			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
+			ChatTurn{Role: "assistant", Content: reply, Timestamp: nowTs},
+		)
+		ui.rebuildReversedLines()
+		return false
 	}
 	if fullPrompt == "/clear" || fullPrompt == "/c" {
 		ui.Turns = []ChatTurn{}

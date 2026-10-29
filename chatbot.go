@@ -92,7 +92,7 @@ func readChatPrompt(reader *bufio.Reader, isInteractive bool) (string, error) {
 	return readChatPromptCooked(reader)
 }
 
-func renderStandaloneHeader(width int, confirmExit bool, exitChoice int) string {
+func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *ChatUI) string {
 	if confirmExit {
 		prompt := " Exit ask chat?  "
 		yes := " [ Yes ] "
@@ -114,12 +114,21 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int) string 
 	}
 
 	title := " ask chat"
-	hints := "Ctrl+Enter: Send | y/Ctrl+X: Copy | Ctrl+C: Cancel "
-	if width < 75 {
-		hints = "Ctrl+Enter: Send | Ctrl+C: Cancel "
-	}
-	if width < 50 {
-		hints = "Ctrl+Enter: Send "
+	var hints string
+
+	if chat != nil && chat.Selecting {
+		hints = "[ Text Selected ]  y / Enter: Copy "
+	} else if chat != nil && chat.ActiveRegion == RegionHistory {
+		hints = "↑/↓: Browse | Shift+Arrows: Select | ↑: Prompt "
+	} else {
+		// In Prompt composer
+		hints = "Ctrl+Enter: Send | /help /clear /model /exit | Ctrl+C: Exit "
+		if width < 85 {
+			hints = "Ctrl+Enter: Send | / commands | Ctrl+C: Exit "
+		}
+		if width < 60 {
+			hints = "Ctrl+Enter: Send | Ctrl+C: Exit "
+		}
 	}
 
 	titleRunes := len([]rune(title))
@@ -190,7 +199,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 
 		// 1. Row 1: Header bar
 		sb.WriteString("\x1b[1;1H\x1b[K")
-		sb.WriteString(renderStandaloneHeader(curW, confirmExit, exitChoice))
+		sb.WriteString(renderStandaloneHeader(curW, confirmExit, exitChoice, chat))
 
 		// 2. Row 2: Divider line
 		sb.WriteString("\x1b[2;1H\x1b[K")
