@@ -139,7 +139,7 @@ cat job.pbs | ask "remove alien lines and request 2 nodes with 64gb memory" > jo
 When you want an uninterrupted back-and-forth dialogue without exiting to the shell between each turn:
 ```bash
 $ ask -i
-ask v0.3.5 — Continuous Chat Mode
+ask v0.4.0 — Continuous Chat Mode
 Model: nvidia/nemotron-3.5-lightning:free | Session: session-12345
 Send: Ctrl+Enter | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C
 

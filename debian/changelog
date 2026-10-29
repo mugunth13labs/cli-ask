@@ -1,3 +1,15 @@
+cli-ask (0.4.0-1) unstable; urgency=medium
+
+  * Add inline multiline framed composer for interactive ask without arguments.
+  * Keep submitted prompts and streaming model responses directly in terminal scrollback.
+  * Modernize interactive chat UI (-i) with subtle prompt background tint and lean header bar.
+  * Add soft-wrap aware copying preserving original paragraph structure.
+  * Add vim-style yank (y), copy (c), and Enter to copy in history mode.
+  * Add clean exit confirmation UI and context-sensitive keybinding hints.
+  * Support instant terminal resize and zoom without display corruption.
+  * Eliminate arrow key escape sequence bleed during rapid keystrokes.
+
+ -- Mugunthan <mugunth13@proton.me>  Thu, 29 Oct 2026 21:00:00 +0800
 cli-ask (0.3.5-1) unstable; urgency=medium
 
   * Fix ask -i pre-prompt dispatch bug.
