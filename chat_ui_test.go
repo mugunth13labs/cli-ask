@@ -284,7 +284,7 @@ func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "Ctrl+Shift+C/V") {
+	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "Ctrl+X") {
 		t.Fatalf("expected header to contain shortcuts, got: %q", header)
 	}
 
@@ -318,6 +318,18 @@ func TestDualPaneCtrl12TabSwitching(t *testing.T) {
 		t.Fatalf("expected initial PaneLeft, got: %v", dp.ActivePane)
 	}
 
+	// Send Ctrl+W (0x17) -> switches to PaneRight
+	dp.handleInput([]byte{0x17})
+	if dp.ActivePane != PaneRight {
+		t.Fatalf("expected PaneRight after Ctrl+W, got: %v", dp.ActivePane)
+	}
+
+	// Send Ctrl+W again -> switches back to PaneLeft
+	dp.handleInput([]byte{0x17})
+	if dp.ActivePane != PaneLeft {
+		t.Fatalf("expected PaneLeft after second Ctrl+W, got: %v", dp.ActivePane)
+	}
+
 	// Send Ctrl+2 (CSI u)
 	dp.handleInput([]byte("\x1b[50;5u"))
 	if dp.ActivePane != PaneRight {
@@ -329,11 +341,85 @@ func TestDualPaneCtrl12TabSwitching(t *testing.T) {
 	if dp.ActivePane != PaneLeft {
 		t.Fatalf("expected PaneLeft after Ctrl+1, got: %v", dp.ActivePane)
 	}
+}
 
-	// Send Ctrl+2 (Alt+2 fallback)
-	dp.handleInput([]byte("\x1b2"))
-	if dp.ActivePane != PaneRight {
-		t.Fatalf("expected PaneRight after Alt+2, got: %v", dp.ActivePane)
+func TestBatchedArrowKeysDoNotBleed(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "initial", 50, 15)
+
+	// Send batched arrow keys in a single slice (simulating rapid tapping or key repeat)
+	batched := []byte("\x1b[A\x1b[A\x1b[D\x1b[D\x1b[C\x1b[B")
+	chat.HandleKey(batched)
+
+	// Prompt should NOT contain [A, [D, [C, or [B
+	for _, l := range chat.PromptLines {
+		if strings.Contains(l, "[A") || strings.Contains(l, "[D") || strings.Contains(l, "[C") || strings.Contains(l, "[B") {
+			t.Fatalf("arrow keys bled into prompt composer! PromptLines: %v", chat.PromptLines)
+		}
+	}
+
+	// Also send application cursor keys (DECCKM mode)
+	chat.HandleKey([]byte("\x1bOA\x1bOB\x1bOC\x1bOD"))
+	for _, l := range chat.PromptLines {
+		if strings.Contains(l, "OA") || strings.Contains(l, "OB") || strings.Contains(l, "OC") || strings.Contains(l, "OD") {
+			t.Fatalf("DECCKM arrow keys bled into prompt composer! PromptLines: %v", chat.PromptLines)
+		}
+	}
+}
+
+func TestSoftWrapCopyPreservesParagraph(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 30, 15)
+
+	longPara := "This is a very long response that wraps across multiple visual lines to fit the width."
+	chat.Turns = append(chat.Turns, ChatTurn{Role: "assistant", Content: longPara})
+	chat.rebuildReversedLines()
+
+	// Verify it wrapped into multiple lines
+	if len(chat.ReversedLines) < 3 {
+		t.Fatalf("expected at least 3 reversed lines (header + 2 content lines), got %d", len(chat.ReversedLines))
+	}
+
+	// Select lines 1 and 2 (the wrapped content lines)
+	chat.Selecting = true
+	chat.SelStartR = 1
+	chat.SelStartC = 0
+	chat.SelEndR = 2
+	chat.SelEndC = 20
+
+	selected := chat.getSelectedTextLocked()
+	// Soft-wrapped lines should NOT have \n between them!
+	if strings.Contains(selected, "\n") {
+		t.Fatalf("expected soft-wrapped copy to NOT contain artificial hard newlines, got: %q", selected)
+	}
+	if !strings.Contains(selected, "very long response that wraps") {
+		t.Fatalf("expected seamless fluid paragraph, got: %q", selected)
+	}
+}
+
+func TestYankKeyCopiesInHistory(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 50, 15)
+
+	chat.Turns = append(chat.Turns, ChatTurn{Role: "assistant", Content: "line to yank"})
+	chat.rebuildReversedLines()
+
+	chat.ActiveRegion = RegionHistory
+	chat.Selecting = true
+	chat.SelStartR = 1
+	chat.SelStartC = 0
+	chat.SelEndR = 1
+	chat.SelEndC = 11
+
+	// Press 'y' in history mode
+	shouldExit := chat.HandleKey([]byte("y"))
+	if shouldExit {
+		t.Fatal("pressing 'y' should not exit")
+	}
+
+	selected := chat.GetSelectedText()
+	if selected != "line to yank" {
+		t.Fatalf("expected selected text 'line to yank', got: %q", selected)
 	}
 }
 

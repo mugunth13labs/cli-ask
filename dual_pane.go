@@ -128,15 +128,15 @@ func (dp *DualPaneWorkspace) Render() {
 	divider := "\x1b[90m│\x1b[0m"
 
 	var rightTab string
-	hint := "Ctrl+1/2 | Ctrl+X "
+	hint := "Ctrl+W | y/Ctrl+X "
 	if rightWidth >= 55 {
-		hint = "Ctrl+1/2: Tabs | Ctrl+Shift+C/V: Copy/Paste "
+		hint = "Ctrl+W: Switch | y/Ctrl+X: Copy "
 	}
 	title := " [2] Terminal"
 	titleRunes := len([]rune(title))
 	remRight := rightWidth - titleRunes - len(hint)
 	if remRight < 1 {
-		hint = "Ctrl+1/2 "
+		hint = "Ctrl+W "
 		remRight = rightWidth - titleRunes - len(hint)
 	}
 	if remRight < 0 {
@@ -198,6 +198,29 @@ func (dp *DualPaneWorkspace) Render() {
 
 func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 	// 1. Pane Tab Switching:
+	// Ctrl+W (0x17) window/pane cycle
+	if bytes.Contains(inBuf, []byte{0x17}) {
+		dp.mu.Lock()
+		if dp.ActivePane == PaneLeft {
+			dp.ActivePane = PaneRight
+		} else {
+			dp.ActivePane = PaneLeft
+		}
+		dp.mu.Unlock()
+		dp.Render()
+
+		var filtered []byte
+		for _, b := range inBuf {
+			if b != 0x17 {
+				filtered = append(filtered, b)
+			}
+		}
+		inBuf = filtered
+		if len(inBuf) == 0 {
+			return false
+		}
+	}
+
 	// Ctrl+1: Focus PaneLeft (ask chat)
 	isCtrl1 := bytes.Equal(inBuf, []byte("\x1b[49;5u")) ||
 		bytes.Equal(inBuf, []byte("\x1b[27;5;49~")) ||

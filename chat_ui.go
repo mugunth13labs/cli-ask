@@ -24,9 +24,10 @@ type ChatTurn struct {
 }
 
 type HistLine struct {
-	Text       string
-	IsBanner   bool
-	BannerKind string // "USER", "AI", "STREAM", "END", "LEAN_LINE", "USER_LINE"
+	Text            string
+	IsBanner        bool
+	BannerKind      string // "USER", "AI", "STREAM", "END", "LEAN_LINE", "USER_LINE"
+	EndsWithNewline bool
 }
 
 type VisPromptLine struct {
@@ -233,13 +234,16 @@ func (ui *ChatUI) rebuildReversedLines() {
 			rem = 0
 		}
 		streamHeader := strings.Repeat("─", rem) + " " + label
-		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: "LEAN_LINE", EndsWithNewline: true})
 
-		wrapped := wrapText(ui.StreamContent.String(), contentWidth)
+		wrapped := wrapTextLines(ui.StreamContent.String(), contentWidth)
 		for _, w := range wrapped {
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{
+				Text:            w.Text,
+				EndsWithNewline: w.EndsWithNewline,
+			})
 		}
-		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: "", EndsWithNewline: true}) // spacing
 	}
 
 	// 2. Iterate turns in REVERSE chronological order (newest turns appear first!)
@@ -256,13 +260,16 @@ func (ui *ChatUI) rebuildReversedLines() {
 				rem = 0
 			}
 			startHeader := strings.Repeat("─", rem) + " " + ts
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startHeader, IsBanner: true, BannerKind: "LEAN_LINE", EndsWithNewline: true})
 
-			wrapped := wrapText(turn.Content, contentWidth)
+			wrapped := wrapTextLines(turn.Content, contentWidth)
 			for _, w := range wrapped {
-				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+				ui.ReversedLines = append(ui.ReversedLines, HistLine{
+					Text:            w.Text,
+					EndsWithNewline: w.EndsWithNewline,
+				})
 			}
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: "", EndsWithNewline: true}) // spacing
 		} else {
 			// User Turn: left-aligned "─ prompt hh:mm:ss ──────"
 			ts := turn.Timestamp
@@ -275,13 +282,16 @@ func (ui *ChatUI) rebuildReversedLines() {
 				rem = 0
 			}
 			startLine := headerText + strings.Repeat("─", rem)
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: "USER_LINE"})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: "USER_LINE", EndsWithNewline: true})
 
-			wrapped := wrapText(turn.Content, contentWidth)
+			wrapped := wrapTextLines(turn.Content, contentWidth)
 			for _, w := range wrapped {
-				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+				ui.ReversedLines = append(ui.ReversedLines, HistLine{
+					Text:            w.Text,
+					EndsWithNewline: w.EndsWithNewline,
+				})
 			}
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: "", EndsWithNewline: true}) // spacing
 		}
 	}
 }
@@ -542,8 +552,12 @@ func (ui *ChatUI) getSelectedTextLocked() string {
 		if start <= end && start < len(runes) {
 			sb.WriteString(string(runes[start : end+1]))
 		}
-		if r < eR || (eC >= len(runes) && len(runes) > 0) {
-			sb.WriteString("\n")
+		if r < eR {
+			if ui.ReversedLines[r].EndsWithNewline {
+				sb.WriteString("\n")
+			} else {
+				sb.WriteString(" ")
+			}
 		}
 	}
 	return sb.String()
@@ -679,6 +693,157 @@ func (ui *ChatUI) insertText(s string) {
 	}
 }
 
+func parseEscapeSeq(b []byte) int {
+	if len(b) == 0 || b[0] != 0x1b {
+		return 0
+	}
+	if len(b) == 1 {
+		return 1
+	}
+	if b[1] == '[' {
+		// CSI sequence: \x1b[ ... finalByte (0x40-0x7E)
+		for i := 2; i < len(b); i++ {
+			if b[i] >= 0x40 && b[i] <= 0x7E {
+				return i + 1
+			}
+		}
+		return len(b)
+	}
+	if b[1] == 'O' {
+		// SS3 sequence: \x1bO <finalByte>
+		if len(b) >= 3 {
+			return 3
+		}
+		return len(b)
+	}
+	if b[1] == ']' {
+		// OSC sequence: \x1b] ... (\x07 or \x1b\)
+		for i := 2; i < len(b); i++ {
+			if b[i] == 0x07 {
+				return i + 1
+			}
+			if b[i] == 0x1b && i+1 < len(b) && b[i+1] == '\\' {
+				return i + 2
+			}
+		}
+		return len(b)
+	}
+	// 2-byte escape, e.g. \x1b1, \x1b2, etc.
+	return 2
+}
+
+func (ui *ChatUI) handleUpArrow() {
+	ui.Selecting = false
+	if ui.ActiveRegion == RegionPrompt {
+		vis := ui.getVisualPromptLines(ui.Width)
+		visRow, visCol := ui.cursorToVis(vis)
+		if visRow > 0 {
+			ui.visToCursor(vis, visRow-1, visCol)
+			ui.adjustPromptScroll()
+		}
+	} else { // In History
+		if ui.HistRow > 0 {
+			ui.HistRow--
+			ui.adjustHistScroll()
+		} else {
+			// Transition back up into the Prompt Box!
+			ui.ActiveRegion = RegionPrompt
+			vis := ui.getVisualPromptLines(ui.Width)
+			ui.visToCursor(vis, len(vis)-1, 0)
+			ui.adjustPromptScroll()
+		}
+	}
+}
+
+func (ui *ChatUI) handleDownArrow() {
+	ui.Selecting = false
+	if ui.ActiveRegion == RegionPrompt {
+		vis := ui.getVisualPromptLines(ui.Width)
+		visRow, visCol := ui.cursorToVis(vis)
+		if visRow < len(vis)-1 {
+			ui.visToCursor(vis, visRow+1, visCol)
+			ui.adjustPromptScroll()
+		} else {
+			// Transition down into Reversed History!
+			if len(ui.ReversedLines) > 0 {
+				ui.ActiveRegion = RegionHistory
+				ui.HistRow = 0
+				ui.HistCol = 0
+				ui.HistScroll = 0
+			}
+		}
+	} else { // In History
+		if ui.HistRow < len(ui.ReversedLines)-1 {
+			ui.HistRow++
+			ui.adjustHistScroll()
+		}
+	}
+}
+
+func (ui *ChatUI) handleLeftArrow() {
+	ui.Selecting = false
+	if ui.ActiveRegion == RegionPrompt {
+		if ui.PromptCol > 0 {
+			ui.PromptCol--
+		} else if ui.PromptRow > 0 {
+			ui.PromptRow--
+			ui.PromptCol = len([]rune(ui.PromptLines[ui.PromptRow]))
+		}
+		ui.adjustPromptScroll()
+	} else {
+		if ui.HistCol > 0 {
+			ui.HistCol--
+		}
+	}
+}
+
+func (ui *ChatUI) handleRightArrow() {
+	ui.Selecting = false
+	if ui.ActiveRegion == RegionPrompt {
+		curLineLen := len([]rune(ui.PromptLines[ui.PromptRow]))
+		if ui.PromptCol < curLineLen {
+			ui.PromptCol++
+		} else if ui.PromptRow < len(ui.PromptLines)-1 {
+			ui.PromptRow++
+			ui.PromptCol = 0
+		}
+		ui.adjustPromptScroll()
+	} else {
+		ui.HistCol++
+	}
+}
+
+func (ui *ChatUI) submitPrompt() (shouldExit bool) {
+	fullPrompt := strings.TrimSpace(strings.Join(ui.PromptLines, "\n"))
+	if fullPrompt == "" {
+		return false
+	}
+	if fullPrompt == "/exit" || fullPrompt == "/quit" || fullPrompt == "/q" {
+		return true
+	}
+	if fullPrompt == "/clear" || fullPrompt == "/c" {
+		ui.Turns = []ChatTurn{}
+		ui.PromptLines = []string{""}
+		ui.PromptRow = 0
+		ui.PromptCol = 0
+		ui.rebuildReversedLines()
+		if ui.Session != nil {
+			ui.Session.Messages = []Message{}
+			_ = saveSession(ui.Session)
+		}
+		return false
+	}
+	nowTs := time.Now().Format("15:04:05")
+	ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs})
+	ui.PromptLines = []string{""}
+	ui.PromptRow = 0
+	ui.PromptCol = 0
+	ui.PromptScroll = 0
+	ui.rebuildReversedLines()
+	go ui.executeChatQuery(fullPrompt)
+	return false
+}
+
 func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	// Guard against SGR mouse escape sequences reaching key handler
 	if bytes.HasPrefix(inBuf, []byte("\x1b[<")) {
@@ -688,242 +853,197 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
-	// 1. Shift+Arrows for text selection in history
-	if bytes.HasPrefix(inBuf, []byte("\x1b[1;2")) || bytes.HasPrefix(inBuf, []byte("\x1b[1;6")) {
-		dir := inBuf[len(inBuf)-1]
-		if ui.ActiveRegion == RegionHistory {
-			if !ui.Selecting {
-				ui.Selecting = true
-				ui.SelStartR = ui.HistRow
-				ui.SelStartC = ui.HistCol
+	offset := 0
+	for offset < len(inBuf) {
+		chunk := inBuf[offset:]
+
+		// 1. Escape Sequence Handler
+		if chunk[0] == 0x1b {
+			seqLen := parseEscapeSeq(chunk)
+			seq := chunk[:seqLen]
+			offset += seqLen
+
+			// 1a. Arrow Keys: Up, Down, Left, Right (both standard CSI and SS3/DECCKM)
+			if bytes.Equal(seq, []byte("\x1b[A")) || bytes.Equal(seq, []byte("\x1bOA")) {
+				ui.handleUpArrow()
+				continue
 			}
-			switch dir {
-			case 'A': // Up
-				if ui.HistRow > 0 {
-					ui.HistRow--
+			if bytes.Equal(seq, []byte("\x1b[B")) || bytes.Equal(seq, []byte("\x1bOB")) {
+				ui.handleDownArrow()
+				continue
+			}
+			if bytes.Equal(seq, []byte("\x1b[D")) || bytes.Equal(seq, []byte("\x1bOD")) {
+				ui.handleLeftArrow()
+				continue
+			}
+			if bytes.Equal(seq, []byte("\x1b[C")) || bytes.Equal(seq, []byte("\x1bOC")) {
+				ui.handleRightArrow()
+				continue
+			}
+
+			// 1b. Shift+Arrows for selection in history
+			if bytes.HasPrefix(seq, []byte("\x1b[1;2")) || bytes.HasPrefix(seq, []byte("\x1b[1;6")) {
+				dir := seq[len(seq)-1]
+				if ui.ActiveRegion == RegionHistory {
+					if !ui.Selecting {
+						ui.Selecting = true
+						ui.SelStartR = ui.HistRow
+						ui.SelStartC = ui.HistCol
+					}
+					switch dir {
+					case 'A': // Up
+						if ui.HistRow > 0 {
+							ui.HistRow--
+						}
+					case 'B': // Down
+						if ui.HistRow < len(ui.ReversedLines)-1 {
+							ui.HistRow++
+						}
+					case 'C': // Right
+						ui.HistCol++
+					case 'D': // Left
+						if ui.HistCol > 0 {
+							ui.HistCol--
+						}
+					}
+					ui.SelEndR = ui.HistRow
+					ui.SelEndC = ui.HistCol
+					ui.adjustHistScroll()
 				}
-			case 'B': // Down
-				if ui.HistRow < len(ui.ReversedLines)-1 {
-					ui.HistRow++
+				continue
+			}
+
+			// 1c. Ctrl+Enter via CSI u: \x1b[13;5u or \x1b[27;5;13~
+			if bytes.Equal(seq, []byte("\x1b[13;5u")) || bytes.Equal(seq, []byte("\x1b[27;5;13~")) {
+				if ui.submitPrompt() {
+					return true
 				}
-			case 'C': // Right
-				ui.HistCol++
-			case 'D': // Left
-				if ui.HistCol > 0 {
-					ui.HistCol--
+				continue
+			}
+
+			// 1d. Ctrl+Shift+C (CSI u)
+			if bytes.Equal(seq, []byte("\x1b[67;6u")) || bytes.Equal(seq, []byte("\x1b[99;6u")) ||
+				bytes.Equal(seq, []byte("\x1b[27;6;67~")) || bytes.Equal(seq, []byte("\x1b[27;6;99~")) {
+				if ui.Selecting {
+					selected := ui.getSelectedTextLocked()
+					if selected != "" {
+						copyToClipboard(selected)
+					}
 				}
+				continue
 			}
-			ui.SelEndR = ui.HistRow
-			ui.SelEndC = ui.HistCol
-			ui.adjustHistScroll()
-			return false
-		}
-	}
 
-	// 2. Ctrl+C: Cancel generation if streaming, else quit
-	if len(inBuf) == 1 && inBuf[0] == 3 {
-		if ui.IsStreaming && ui.ActiveCancel != nil {
-			ui.ActiveCancel()
-			ui.ActiveCancel = nil
-			return false
-		}
-		return true
-	}
-
-	// 2b. Ctrl+X or Ctrl+Shift+C: Copy active selection to clipboard
-	isCopy := (len(inBuf) == 1 && inBuf[0] == 24) || // Ctrl+X
-		bytes.Equal(inBuf, []byte("\x1b[67;6u")) || // Ctrl+Shift+C (CSI u)
-		bytes.Equal(inBuf, []byte("\x1b[99;6u")) ||
-		bytes.Equal(inBuf, []byte("\x1b[27;6;67~")) ||
-		bytes.Equal(inBuf, []byte("\x1b[27;6;99~"))
-
-	if isCopy {
-		if ui.Selecting {
-			selected := ui.getSelectedTextLocked()
-			if selected != "" {
-				copyToClipboard(selected)
-			}
-			return false
-		}
-	}
-
-	// 2c. Ctrl+Shift+V: Paste from clipboard into prompt box
-	isPaste := bytes.Equal(inBuf, []byte("\x1b[86;6u")) || // Ctrl+Shift+V (CSI u)
-		bytes.Equal(inBuf, []byte("\x1b[118;6u")) ||
-		bytes.Equal(inBuf, []byte("\x1b[27;6;86~")) ||
-		bytes.Equal(inBuf, []byte("\x1b[27;6;118~"))
-
-	if isPaste && ui.ActiveRegion == RegionPrompt {
-		clipText := readClipboard()
-		if clipText != "" {
-			ui.insertText(clipText)
-			ui.adjustPromptScroll()
-			return false
-		}
-	}
-
-	// 3. Arrow Keys: Up, Down, Left, Right
-	if bytes.Equal(inBuf, []byte("\x1b[A")) { // Up Arrow
-		ui.Selecting = false
-		if ui.ActiveRegion == RegionPrompt {
-			vis := ui.getVisualPromptLines(ui.Width)
-			visRow, visCol := ui.cursorToVis(vis)
-			if visRow > 0 {
-				ui.visToCursor(vis, visRow-1, visCol)
-				ui.adjustPromptScroll()
-			}
-		} else { // In History
-			if ui.HistRow > 0 {
-				ui.HistRow--
-				ui.adjustHistScroll()
-			} else {
-				// Transition back up into the Prompt Box!
-				ui.ActiveRegion = RegionPrompt
-				vis := ui.getVisualPromptLines(ui.Width)
-				ui.visToCursor(vis, len(vis)-1, 0)
-				ui.adjustPromptScroll()
-			}
-		}
-		return false
-	}
-
-	if bytes.Equal(inBuf, []byte("\x1b[B")) { // Down Arrow
-		ui.Selecting = false
-		if ui.ActiveRegion == RegionPrompt {
-			vis := ui.getVisualPromptLines(ui.Width)
-			visRow, visCol := ui.cursorToVis(vis)
-			if visRow < len(vis)-1 {
-				ui.visToCursor(vis, visRow+1, visCol)
-				ui.adjustPromptScroll()
-			} else {
-				// Transition down into Reversed History!
-				if len(ui.ReversedLines) > 0 {
-					ui.ActiveRegion = RegionHistory
-					ui.HistRow = 0
-					ui.HistCol = 0
-					ui.HistScroll = 0
+			// 1e. Ctrl+Shift+V (CSI u)
+			if bytes.Equal(seq, []byte("\x1b[86;6u")) || bytes.Equal(seq, []byte("\x1b[118;6u")) ||
+				bytes.Equal(seq, []byte("\x1b[27;6;86~")) || bytes.Equal(seq, []byte("\x1b[27;6;118~")) {
+				if ui.ActiveRegion == RegionPrompt {
+					clipText := readClipboard()
+					if clipText != "" {
+						ui.insertText(clipText)
+						ui.adjustPromptScroll()
+					}
 				}
+				continue
 			}
-		} else { // In History
-			if ui.HistRow < len(ui.ReversedLines)-1 {
-				ui.HistRow++
-				ui.adjustHistScroll()
-			}
-		}
-		return false
-	}
 
-	if bytes.Equal(inBuf, []byte("\x1b[D")) { // Left Arrow
-		ui.Selecting = false
-		if ui.ActiveRegion == RegionPrompt {
-			if ui.PromptCol > 0 {
-				ui.PromptCol--
-			} else if ui.PromptRow > 0 {
-				ui.PromptRow--
-				ui.PromptCol = len([]rune(ui.PromptLines[ui.PromptRow]))
-			}
-			ui.adjustPromptScroll()
-		} else {
-			if ui.HistCol > 0 {
-				ui.HistCol--
-			}
-		}
-		return false
-	}
-
-	if bytes.Equal(inBuf, []byte("\x1b[C")) { // Right Arrow
-		ui.Selecting = false
-		if ui.ActiveRegion == RegionPrompt {
-			curLineLen := len([]rune(ui.PromptLines[ui.PromptRow]))
-			if ui.PromptCol < curLineLen {
-				ui.PromptCol++
-			} else if ui.PromptRow < len(ui.PromptLines)-1 {
-				ui.PromptRow++
-				ui.PromptCol = 0
-			}
-			ui.adjustPromptScroll()
-		} else {
-			ui.HistCol++
-		}
-		return false
-	}
-
-	// 4. Submit: Ctrl+Enter (LF=10, or CSI u \x1b[13;5u / \x1b[27;5;13~)
-	isCtrlEnter := (len(inBuf) == 1 && inBuf[0] == 10) ||
-		bytes.Equal(inBuf, []byte("\x1b[13;5u")) ||
-		bytes.Equal(inBuf, []byte("\x1b[27;5;13~"))
-
-	if isCtrlEnter && ui.ActiveRegion == RegionPrompt {
-		fullPrompt := strings.TrimSpace(strings.Join(ui.PromptLines, "\n"))
-		if fullPrompt == "" {
-			return false
+			// Unrecognized escape sequences: safely consumed and discarded (never inserted as text!)
+			continue
 		}
 
-		// Slash commands
-		if fullPrompt == "/exit" || fullPrompt == "/quit" || fullPrompt == "/q" {
+		// 2. Non-Escape input
+		b := chunk[0]
+
+		// Ctrl+C (3): Cancel stream or exit
+		if b == 3 {
+			offset++
+			if ui.IsStreaming && ui.ActiveCancel != nil {
+				ui.ActiveCancel()
+				ui.ActiveCancel = nil
+				continue
+			}
 			return true
 		}
-		if fullPrompt == "/clear" || fullPrompt == "/c" {
-			ui.Turns = []ChatTurn{}
-			ui.PromptLines = []string{""}
-			ui.PromptRow = 0
-			ui.PromptCol = 0
-			ui.rebuildReversedLines()
-			if ui.Session != nil {
-				ui.Session.Messages = []Message{}
-				_ = saveSession(ui.Session)
+
+		// Ctrl+X (24): Copy selection
+		if b == 24 {
+			offset++
+			if ui.Selecting {
+				selected := ui.getSelectedTextLocked()
+				if selected != "" {
+					copyToClipboard(selected)
+				}
 			}
-			return false
+			continue
 		}
 
-		// Add turn to history
-		nowTs := time.Now().Format("15:04:05")
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs})
-		ui.PromptLines = []string{""}
-		ui.PromptRow = 0
-		ui.PromptCol = 0
-		ui.PromptScroll = 0
-		ui.rebuildReversedLines()
-
-		go ui.executeChatQuery(fullPrompt)
-		return false
-	}
-
-	// 5. In History: ignore typing characters (user must arrow Up into prompt to type)
-	if ui.ActiveRegion == RegionHistory {
-		return false
-	}
-
-	// 6. Enter key (13 or \r\n): Newline in prompt!
-	if (len(inBuf) == 1 && inBuf[0] == 13) || bytes.Equal(inBuf, []byte("\r\n")) {
-		ui.insertNewline()
-		ui.adjustPromptScroll()
-		return false
-	}
-
-	// 7. Backspace (127 or 8)
-	if len(inBuf) == 1 && (inBuf[0] == 127 || inBuf[0] == 8) {
-		curLine := ui.PromptLines[ui.PromptRow]
-		runes := []rune(curLine)
-
-		if ui.PromptCol > 0 {
-			ui.PromptLines[ui.PromptRow] = string(append(runes[:ui.PromptCol-1], runes[ui.PromptCol:]...))
-			ui.PromptCol--
-		} else if ui.PromptRow > 0 {
-			prevLine := ui.PromptLines[ui.PromptRow-1]
-			prevRunes := []rune(prevLine)
-			ui.PromptCol = len(prevRunes)
-			ui.PromptLines[ui.PromptRow-1] = prevLine + curLine
-			ui.PromptLines = append(ui.PromptLines[:ui.PromptRow], ui.PromptLines[ui.PromptRow+1:]...)
-			ui.PromptRow--
+		// In History Region:
+		if ui.ActiveRegion == RegionHistory {
+			offset++
+			// Vim-style 'y' (yank), 'c' (copy), or Enter: copy selection!
+			if (b == 'y' || b == 'Y' || b == 'c' || b == 'C' || b == 13 || b == 10) && ui.Selecting {
+				selected := ui.getSelectedTextLocked()
+				if selected != "" {
+					copyToClipboard(selected)
+				}
+			}
+			continue
 		}
-		ui.adjustPromptScroll()
-		return false
+
+		// In Prompt Region:
+		// Standalone Ctrl+J / LF: Ctrl+Enter
+		if b == 10 && len(inBuf) == 1 {
+			offset++
+			if ui.submitPrompt() {
+				return true
+			}
+			continue
+		}
+
+		// Newline in prompt: Enter (13), CRLF (13, 10), or pasted LF (10)
+		if b == 10 || b == 13 {
+			offset++
+			if b == 13 && offset < len(inBuf) && inBuf[offset] == 10 {
+				offset++
+			}
+			ui.insertNewline()
+			ui.adjustPromptScroll()
+			continue
+		}
+
+		// Backspace (127 or 8)
+		if b == 127 || b == 8 {
+			offset++
+			curLine := ui.PromptLines[ui.PromptRow]
+			runes := []rune(curLine)
+
+			if ui.PromptCol > 0 {
+				ui.PromptLines[ui.PromptRow] = string(append(runes[:ui.PromptCol-1], runes[ui.PromptCol:]...))
+				ui.PromptCol--
+			} else if ui.PromptRow > 0 {
+				prevLine := ui.PromptLines[ui.PromptRow-1]
+				prevRunes := []rune(prevLine)
+				ui.PromptCol = len(prevRunes)
+				ui.PromptLines[ui.PromptRow-1] = prevLine + curLine
+				ui.PromptLines = append(ui.PromptLines[:ui.PromptRow], ui.PromptLines[ui.PromptRow+1:]...)
+				ui.PromptRow--
+			}
+			ui.adjustPromptScroll()
+			continue
+		}
+
+		// Collect contiguous text bytes up to next control/escape char
+		end := offset
+		for end < len(inBuf) && inBuf[end] != 0x1b && inBuf[end] != 3 && inBuf[end] != 24 && inBuf[end] != 10 && inBuf[end] != 13 && inBuf[end] != 127 && inBuf[end] != 8 {
+			end++
+		}
+		textBytes := inBuf[offset:end]
+		offset = end
+		if len(textBytes) > 0 {
+			ui.insertText(string(textBytes))
+			ui.adjustPromptScroll()
+		}
 	}
 
-	// 8. Text insertion into prompt line (handles pasted text and newlines)
-	ui.insertText(string(inBuf))
-	ui.adjustPromptScroll()
 	return false
 }
 
@@ -952,7 +1072,7 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 	}
 	apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
 
-	if len(ui.Session.Messages) > 0 {
+	if ui.Session != nil && len(ui.Session.Messages) > 0 {
 		compacted := compactHistory(ui.Session.Messages)
 		apiMessages = append(apiMessages, compacted...)
 	}

@@ -114,7 +114,7 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int) string 
 	}
 
 	title := " ask chat"
-	hints := "Ctrl+Enter: Send | Ctrl+Shift+C/V: Copy/Paste | Ctrl+C: Cancel "
+	hints := "Ctrl+Enter: Send | y/Ctrl+X: Copy | Ctrl+C: Cancel "
 	if width < 75 {
 		hints = "Ctrl+Enter: Send | Ctrl+C: Cancel "
 	}
