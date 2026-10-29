@@ -1,6 +1,6 @@
 //go:build darwin
 
-package main
+package cli
 
 const (
 	tcgets     = 0x40487413

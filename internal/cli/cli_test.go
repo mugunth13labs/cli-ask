@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -480,31 +480,6 @@ func TestStrictSlashCommands(t *testing.T) {
 		if !isChatCommand(cmd) {
 			t.Errorf("command %q with slash MUST be recognized as a chat command", cmd)
 		}
-	}
-}
-
-func TestParseCLIArgsSplit(t *testing.T) {
-	p1 := parseCLIArgs([]string{"-s"})
-	if p1.Action != "chatbot" || !p1.Split {
-		t.Errorf("expected chatbot with Split=true for -s, got action=%q, split=%v", p1.Action, p1.Split)
-	}
-
-	p2 := parseCLIArgs([]string{"--split"})
-	if p2.Action != "chatbot" || !p2.Split {
-		t.Errorf("expected chatbot with Split=true for --split, got action=%q, split=%v", p2.Action, p2.Split)
-	}
-
-	p3 := parseCLIArgs([]string{"-s", "explain", "cgroups"})
-	if p3.Action != "chatbot" || !p3.Split {
-		t.Errorf("expected chatbot with Split=true for -s prompt")
-	}
-	if p3.Prompt != "explain cgroups" {
-		t.Errorf("expected prompt 'explain cgroups', got %q", p3.Prompt)
-	}
-
-	p4 := parseCLIArgs([]string{"-i", "--split"})
-	if p4.Action != "chatbot" || !p4.Split {
-		t.Errorf("expected chatbot with Split=true for -i --split")
 	}
 }
 

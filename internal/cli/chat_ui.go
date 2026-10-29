@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -855,8 +855,19 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 			reply = fmt.Sprintf("Current model: %s", ui.Config.Model)
 		} else {
 			newModel := parts[1]
-			ui.Config.Model = newModel
-			reply = fmt.Sprintf("Model switched to: %s", newModel)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			valid, err := ValidateModel(ctx, ui.Config.APIKey, newModel)
+			cancel()
+
+			if err != nil {
+				reply = fmt.Sprintf("Error checking model with OpenRouter: %v. Keeping previous model: %s", err, ui.Config.Model)
+			} else if !valid {
+				reply = fmt.Sprintf("Error: Model '%s' not found on OpenRouter. Keeping previous model: %s", newModel, ui.Config.Model)
+			} else {
+				ui.Config.Model = newModel
+				_ = saveConfig(ui.Config)
+				reply = fmt.Sprintf("Model switched to: %s", newModel)
+			}
 		}
 		ui.Turns = append(ui.Turns,
 			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},

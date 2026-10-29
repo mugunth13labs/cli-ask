@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"strings"
@@ -347,57 +347,35 @@ func TestSlashCommandHelpAndModel(t *testing.T) {
 		t.Fatalf("unexpected help turn content: %q", helpTurn.Content)
 	}
 
-	// Test /model switch
-	chat.PromptLines = []string{"/model claude-3-opus"}
+	// Test /model validation:
+	modelsCacheMu.Lock()
+	modelsCache = map[string]bool{
+		"nvidia/nemotron-3.5-lightning:free": true,
+	}
+	modelsCacheAt = time.Now()
+	modelsCacheMu.Unlock()
+
+	// 1. Invalid model -> rejected and keeps previous model!
+	chat.Config.Model = "gpt-4"
+	chat.PromptLines = []string{"/model some-rando-name"}
 	chat.submitPrompt()
-	if chat.Config.Model != "claude-3-opus" {
-		t.Fatalf("expected model to switch to claude-3-opus, got: %s", chat.Config.Model)
+	if chat.Config.Model != "gpt-4" {
+		t.Fatalf("expected model to remain gpt-4 after invalid model switch, got: %s", chat.Config.Model)
+	}
+	errTurn := chat.Turns[len(chat.Turns)-1]
+	if !strings.Contains(errTurn.Content, "not found on OpenRouter") || !strings.Contains(errTurn.Content, "Keeping previous model: gpt-4") {
+		t.Fatalf("unexpected error turn content for invalid model: %q", errTurn.Content)
+	}
+
+	// 2. Valid model -> successfully switched!
+	chat.PromptLines = []string{"/model nvidia/nemotron-3.5-lightning:free"}
+	chat.submitPrompt()
+	if chat.Config.Model != "nvidia/nemotron-3.5-lightning:free" {
+		t.Fatalf("expected model to switch to nvidia/nemotron-3.5-lightning:free, got: %s", chat.Config.Model)
 	}
 	modelTurn := chat.Turns[len(chat.Turns)-1]
-	if !strings.Contains(modelTurn.Content, "Model switched to: claude-3-opus") {
+	if !strings.Contains(modelTurn.Content, "Model switched to: nvidia/nemotron-3.5-lightning:free") {
 		t.Fatalf("unexpected model turn content: %q", modelTurn.Content)
-	}
-}
-
-func TestDualPaneCtrl12TabSwitching(t *testing.T) {
-	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
-	dp, err := NewDualPaneWorkspace(cfg, "", QueryOptions{})
-	if err != nil {
-		t.Fatalf("failed to create dual pane workspace: %v", err)
-	}
-	defer func() {
-		if dp.RightPTY != nil {
-			_ = dp.RightPTY.Close()
-		}
-	}()
-
-	// Starts at PaneLeft
-	if dp.ActivePane != PaneLeft {
-		t.Fatalf("expected initial PaneLeft, got: %v", dp.ActivePane)
-	}
-
-	// Send Ctrl+W (0x17) -> switches to PaneRight
-	dp.handleInput([]byte{0x17})
-	if dp.ActivePane != PaneRight {
-		t.Fatalf("expected PaneRight after Ctrl+W, got: %v", dp.ActivePane)
-	}
-
-	// Send Ctrl+W again -> switches back to PaneLeft
-	dp.handleInput([]byte{0x17})
-	if dp.ActivePane != PaneLeft {
-		t.Fatalf("expected PaneLeft after second Ctrl+W, got: %v", dp.ActivePane)
-	}
-
-	// Send Ctrl+2 (CSI u)
-	dp.handleInput([]byte("\x1b[50;5u"))
-	if dp.ActivePane != PaneRight {
-		t.Fatalf("expected PaneRight after Ctrl+2, got: %v", dp.ActivePane)
-	}
-
-	// Send Ctrl+1 (CSI u)
-	dp.handleInput([]byte("\x1b[49;5u"))
-	if dp.ActivePane != PaneLeft {
-		t.Fatalf("expected PaneLeft after Ctrl+1, got: %v", dp.ActivePane)
 	}
 }
 

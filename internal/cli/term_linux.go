@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package cli
 
 const (
 	tcgets     = 0x5401

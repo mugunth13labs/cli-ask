@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -298,4 +299,73 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts 
 	}
 
 	return finalResponse, nil
+}
+
+
+const openRouterModelsURL = "https://openrouter.ai/api/v1/models"
+
+var (
+	modelsCacheMu sync.Mutex
+	modelsCache   map[string]bool
+	modelsCacheAt time.Time
+)
+
+// ValidateModel verifies whether the specified model exists on OpenRouter.
+// It caches results in memory for 10 minutes to minimize network latency during interactive sessions.
+func ValidateModel(ctx context.Context, apiKey, modelID string) (bool, error) {
+	target := strings.TrimSpace(modelID)
+	if target == "" {
+		return false, fmt.Errorf("model name cannot be empty")
+	}
+
+	modelsCacheMu.Lock()
+	if modelsCache != nil && time.Since(modelsCacheAt) < 10*time.Minute {
+		valid := modelsCache[strings.ToLower(target)]
+		modelsCacheMu.Unlock()
+		return valid, nil
+	}
+	modelsCacheMu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", openRouterModelsURL, nil)
+	if err != nil {
+		return false, err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
+	req.Header.Set("X-Title", "ask-cli")
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to reach OpenRouter: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("OpenRouter API returned HTTP %d", resp.StatusCode)
+	}
+
+	var modelsResp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+		return false, fmt.Errorf("failed to parse models response: %w", err)
+	}
+
+	newCache := make(map[string]bool, len(modelsResp.Data))
+	for _, m := range modelsResp.Data {
+		newCache[strings.ToLower(strings.TrimSpace(m.ID))] = true
+	}
+
+	modelsCacheMu.Lock()
+	modelsCache = newCache
+	modelsCacheAt = time.Now()
+	valid := modelsCache[strings.ToLower(target)]
+	modelsCacheMu.Unlock()
+
+	return valid, nil
 }
