@@ -525,7 +525,7 @@ func TestWrapText(t *testing.T) {
 func TestFormatInlineComposerBox(t *testing.T) {
 	ed := NewMicroEditor("", "")
 	ed.Lines = []string{"how do I check open ports in linux?", "preferably with ss"}
-	top, lines, bottom, _, _ := formatInlineComposerBox(ed, 80, "")
+	top, lines, bottom, _, _, _ := formatInlineComposerBox(ed, 80, 5, 0, "")
 
 	if !strings.Contains(top, "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ]") {
 		t.Errorf("expected header in top border, got: %q", top)
@@ -543,9 +543,76 @@ func TestFormatInlineComposerBox(t *testing.T) {
 	}
 
 	// With target description
-	topTarget, _, _, _, _ := formatInlineComposerBox(ed, 80, "main.go")
+	topTarget, _, _, _, _, _ := formatInlineComposerBox(ed, 80, 5, 0, "main.go")
 	if !strings.Contains(topTarget, "Target: main.go") {
 		t.Errorf("expected Target: main.go in top border, got: %q", topTarget)
+	}
+}
+
+func TestFormatInlineComposerBoxViewportRestrictionAndScrolling(t *testing.T) {
+	ed := NewMicroEditor("", "")
+	ed.Lines = []string{
+		"line 1",
+		"line 2",
+		"line 3",
+		"line 4",
+		"line 5",
+		"line 6",
+		"line 7",
+		"line 8",
+		"line 9",
+		"line 10",
+	}
+
+	// 1. Initial view: cursor at line 0, 5 visible lines maximum
+	ed.CursorRow = 0
+	top, lines, bottom, rowInWin, col, scrollOffset := formatInlineComposerBox(ed, 80, 5, 0, "")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 visible lines, got %d", len(lines))
+	}
+	if scrollOffset != 0 {
+		t.Errorf("expected scrollOffset 0, got %d", scrollOffset)
+	}
+	if rowInWin != 0 || col != 0 {
+		t.Errorf("expected cursor at (0, 0), got (%d, %d)", rowInWin, col)
+	}
+	if !strings.Contains(bottom, "▼ 5 more below") {
+		t.Errorf("expected bottom to indicate 5 more below, got: %q", bottom)
+	}
+
+	// 2. Cursor moved down to line 9 (last line)
+	ed.CursorRow = 9
+	top, lines, bottom, rowInWin, col, scrollOffset = formatInlineComposerBox(ed, 80, 5, scrollOffset, "")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 visible lines, got %d", len(lines))
+	}
+	if scrollOffset != 5 {
+		t.Errorf("expected scrollOffset 5, got %d", scrollOffset)
+	}
+	if rowInWin != 4 {
+		t.Errorf("expected cursor row in window 4, got %d", rowInWin)
+	}
+	if !strings.Contains(top, "▲ 5 above") {
+		t.Errorf("expected top to indicate 5 above, got: %q", top)
+	}
+	if strings.Contains(bottom, "more below") {
+		t.Errorf("expected bottom to have no more below indicator, got: %q", bottom)
+	}
+
+	// 3. Cursor moved back up to line 3
+	ed.CursorRow = 3
+	top, lines, bottom, rowInWin, col, scrollOffset = formatInlineComposerBox(ed, 80, 5, scrollOffset, "")
+	if scrollOffset != 3 {
+		t.Errorf("expected scrollOffset 3, got %d", scrollOffset)
+	}
+	if rowInWin != 0 {
+		t.Errorf("expected cursor row in window 0, got %d", rowInWin)
+	}
+	if !strings.Contains(top, "▲ 3 above") {
+		t.Errorf("expected top to indicate 3 above, got: %q", top)
+	}
+	if !strings.Contains(bottom, "▼ 2 more below") {
+		t.Errorf("expected bottom to indicate 2 more below, got: %q", bottom)
 	}
 }
 
