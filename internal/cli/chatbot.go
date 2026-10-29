@@ -179,12 +179,22 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_ = restoreTerm(inFd, state)
-			_, _ = os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l" + ansiLeaveAltScreen + ansiShowCursor)
+			_, _ = os.Stdout.WriteString("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?2004l" + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
 			_ = os.Stdout.Sync()
+			_ = restoreTerm(inFd, state)
 		})
 	}
 	defer cleanup()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		<-sigChan
+		cleanup()
+		os.Exit(0)
+	}()
 
 	var renderMu sync.Mutex
 	curW, curH := w, h

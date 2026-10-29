@@ -72,7 +72,7 @@ func makeRaw(fd uintptr) (*TermState, error) {
 	state := &TermState{fd: targetFd, mode: mode}
 
 	// Disable line input and echo, enable virtual terminal processing on input
-	rawMode := (mode &^ (enableLineInput | enableEchoInput)) | enableVirtualTerminalInput | enableProcessedInput
+	rawMode := (mode &^ (enableLineInput | enableEchoInput | enableProcessedInput)) | enableVirtualTerminalInput
 	r1, _, err = procSetConsoleMode.Call(targetFd, uintptr(rawMode))
 	if r1 == 0 {
 		// If setting input mode failed, try targetFd = os.Stdin.Fd()
@@ -81,7 +81,7 @@ func makeRaw(fd uintptr) (*TermState, error) {
 			r1, _, err = procGetConsoleMode.Call(targetFd, uintptr(unsafe.Pointer(&mode)))
 			if r1 != 0 {
 				state = &TermState{fd: targetFd, mode: mode}
-				rawMode = (mode &^ (enableLineInput | enableEchoInput)) | enableVirtualTerminalInput | enableProcessedInput
+				rawMode = (mode &^ (enableLineInput | enableEchoInput | enableProcessedInput)) | enableVirtualTerminalInput
 				r1, _, err = procSetConsoleMode.Call(targetFd, uintptr(rawMode))
 			}
 		}

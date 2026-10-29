@@ -575,9 +575,9 @@ func runComposer(title, subtitle string) (string, bool, error) {
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_ = restoreTerm(fd, state)
-			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen)
+			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
 			_ = os.Stdout.Sync()
+			_ = restoreTerm(fd, state)
 		})
 	}
 	defer cleanup()
