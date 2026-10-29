@@ -108,3 +108,93 @@ func TestChatUIBasicsAndDeadlockFree(t *testing.T) {
 		t.Fatal("Ctrl+C should signal exit when not streaming")
 	}
 }
+
+func TestPromptComposerWordWrappingAndNoPrefix(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "hello world", 20, 10)
+
+	// Verify no ">>> " or "... " prefix rendered
+	renderedRow0 := chat.RenderRow(0)
+	if strings.Contains(renderedRow0, ">>>") || strings.Contains(renderedRow0, "...") {
+		t.Fatalf("expected prompt row to NOT contain '>>>' or '...', got: %q", renderedRow0)
+	}
+	if !strings.HasPrefix(renderedRow0, "hello world") {
+		t.Fatalf("expected prompt row to start at column 0 with 'hello world', got: %q", renderedRow0)
+	}
+
+	// Verify cursor starts at column 11 with no +4 offset
+	row, col := chat.CursorPosition()
+	if row != 0 || col != 11 {
+		t.Fatalf("expected cursor at (0, 11), got (%d, %d)", row, col)
+	}
+
+	// Type a long sentence that should soft word wrap at width 20
+	chat.PromptLines = []string{"the quick brown fox jumps over the lazy dog"}
+	chat.PromptCol = len([]rune(chat.PromptLines[0]))
+	vis := chat.getVisualPromptLines(20)
+	if len(vis) < 2 {
+		t.Fatalf("expected visual wrapping into >= 2 lines, got %d lines: %+v", len(vis), vis)
+	}
+
+	// Cursor on visual line
+	visRow, visCol := chat.cursorToVis(vis)
+	if visRow != len(vis)-1 {
+		t.Fatalf("expected cursor on last visual row %d, got %d", len(vis)-1, visRow)
+	}
+	_ = visCol
+}
+
+func TestPromptComposerMultilinePasteAndNewlines(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 40, 10)
+
+	// Simulate pressing Enter via \r\n (2-byte sequence)
+	chat.HandleKey([]byte("line1"))
+	chat.HandleKey([]byte("\r\n"))
+	chat.HandleKey([]byte("line2"))
+	if len(chat.PromptLines) != 2 || chat.PromptLines[0] != "line1" || chat.PromptLines[1] != "line2" {
+		t.Fatalf("expected 2 lines after \\r\\n Enter, got: %v", chat.PromptLines)
+	}
+
+	// Simulate multiline paste buffer with embedded \n and \r\n
+	pasteBuf := []byte("pasted1\npasted2\r\npasted3")
+	chat.PromptLines = []string{""}
+	chat.PromptRow = 0
+	chat.PromptCol = 0
+	chat.HandleKey(pasteBuf)
+
+	if len(chat.PromptLines) != 3 {
+		t.Fatalf("expected 3 lines after multiline paste, got %d: %v", len(chat.PromptLines), chat.PromptLines)
+	}
+	if chat.PromptLines[0] != "pasted1" || chat.PromptLines[1] != "pasted2" || chat.PromptLines[2] != "pasted3" {
+		t.Fatalf("unexpected pasted lines content: %v", chat.PromptLines)
+	}
+}
+
+func TestModelResponseBarLeanAndTimestampOnly(t *testing.T) {
+	cfg := &Config{Model: "my-custom-model", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 50, 15)
+
+	chat.Turns = append(chat.Turns, ChatTurn{
+		Role:      "assistant",
+		Content:   "Here is the answer.",
+		Timestamp: "16:45:00",
+	})
+	chat.rebuildReversedLines()
+
+	if len(chat.ReversedLines) == 0 {
+		t.Fatal("expected reversed lines to be populated")
+	}
+
+	// Check top banner line
+	topBanner := chat.ReversedLines[0]
+	if !topBanner.IsBanner || topBanner.BannerKind != "LEAN_LINE" {
+		t.Fatalf("expected top banner to be LEAN_LINE, got: %+v", topBanner)
+	}
+	if !strings.Contains(topBanner.Text, "16:45:00") {
+		t.Fatalf("expected banner to contain timestamp '16:45:00', got: %q", topBanner.Text)
+	}
+	if strings.Contains(topBanner.Text, "my-custom-model") || strings.Contains(topBanner.Text, "ask [") {
+		t.Fatalf("expected model name to NOT appear in response bar, got: %q", topBanner.Text)
+	}
+}

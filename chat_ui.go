@@ -18,8 +18,22 @@ const (
 )
 
 type ChatTurn struct {
-	Role    string
-	Content string
+	Role      string
+	Content   string
+	Timestamp string // "15:04:05"
+}
+
+type HistLine struct {
+	Text       string
+	IsBanner   bool
+	BannerKind string // "USER", "AI", "STREAM", "END", "LEAN_LINE", "USER_LINE"
+}
+
+type VisPromptLine struct {
+	LogicalRow int
+	StartCol   int
+	EndCol     int
+	Text       string
 }
 
 type ChatUI struct {
@@ -39,7 +53,7 @@ type ChatUI struct {
 
 	// History state
 	Turns         []ChatTurn
-	ReversedLines []string
+	ReversedLines []HistLine
 	HistRow       int
 	HistCol       int
 	HistScroll    int
@@ -99,8 +113,112 @@ func (ui *ChatUI) Resize(w, h int) {
 	ui.adjustHistScroll()
 }
 
+func (ui *ChatUI) getVisualPromptLines(maxWidth int) []VisPromptLine {
+	if maxWidth < 4 {
+		maxWidth = 4
+	}
+	var vis []VisPromptLine
+
+	for lIdx, line := range ui.PromptLines {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			vis = append(vis, VisPromptLine{LogicalRow: lIdx, StartCol: 0, EndCol: 0, Text: ""})
+			continue
+		}
+
+		offset := 0
+		for offset < len(runes) {
+			rem := len(runes) - offset
+			if rem <= maxWidth {
+				vis = append(vis, VisPromptLine{
+					LogicalRow: lIdx,
+					StartCol:   offset,
+					EndCol:     len(runes),
+					Text:       string(runes[offset:]),
+				})
+				break
+			}
+
+			// Try to break at word boundary
+			breakIdx := offset + maxWidth
+			foundSpace := false
+			for i := offset + maxWidth; i > offset+maxWidth/2; i-- {
+				if runes[i] == ' ' || runes[i] == '\t' {
+					breakIdx = i + 1
+					foundSpace = true
+					break
+				}
+			}
+
+			if !foundSpace {
+				breakIdx = offset + maxWidth
+			}
+
+			vis = append(vis, VisPromptLine{
+				LogicalRow: lIdx,
+				StartCol:   offset,
+				EndCol:     breakIdx,
+				Text:       string(runes[offset:breakIdx]),
+			})
+			offset = breakIdx
+		}
+	}
+	if len(vis) == 0 {
+		vis = append(vis, VisPromptLine{LogicalRow: 0, StartCol: 0, EndCol: 0, Text: ""})
+	}
+	return vis
+}
+
+func (ui *ChatUI) cursorToVis(vis []VisPromptLine) (visRow, visCol int) {
+	for i, v := range vis {
+		if v.LogicalRow == ui.PromptRow {
+			isLast := (i == len(vis)-1) || (vis[i+1].LogicalRow != ui.PromptRow)
+			if ui.PromptCol >= v.StartCol && (ui.PromptCol < v.EndCol || (isLast && ui.PromptCol <= v.EndCol)) {
+				return i, ui.PromptCol - v.StartCol
+			}
+		}
+	}
+	if len(vis) > 0 {
+		lastIdx := len(vis) - 1
+		return lastIdx, len([]rune(vis[lastIdx].Text))
+	}
+	return 0, 0
+}
+
+func (ui *ChatUI) visToCursor(vis []VisPromptLine, targetVisRow, targetVisCol int) {
+	if targetVisRow < 0 {
+		targetVisRow = 0
+	}
+	if targetVisRow >= len(vis) {
+		targetVisRow = len(vis) - 1
+	}
+	v := vis[targetVisRow]
+	ui.PromptRow = v.LogicalRow
+	lineRunes := len([]rune(v.Text))
+	col := targetVisCol
+	if col > lineRunes {
+		col = lineRunes
+	}
+	ui.PromptCol = v.StartCol + col
+	curLogicalLen := len([]rune(ui.PromptLines[ui.PromptRow]))
+	if ui.PromptCol > curLogicalLen {
+		ui.PromptCol = curLogicalLen
+	}
+}
+
+func formatCenteredLine(title string, width int) string {
+	titleWithSpaces := " " + title + " "
+	tLen := len([]rune(titleWithSpaces))
+	if tLen >= width {
+		return string([]rune(titleWithSpaces)[:width])
+	}
+	leftDash := (width - tLen) / 2
+	rightDash := width - tLen - leftDash
+	return strings.Repeat("─", leftDash) + titleWithSpaces + strings.Repeat("─", rightDash)
+}
+
 func (ui *ChatUI) rebuildReversedLines() {
-	ui.ReversedLines = []string{}
+	ui.ReversedLines = []HistLine{}
 	contentWidth := ui.Width - 2
 	if contentWidth < 4 {
 		contentWidth = 4
@@ -108,32 +226,66 @@ func (ui *ChatUI) rebuildReversedLines() {
 
 	// 1. If currently streaming, place live assistant turn at the very top of history!
 	if ui.IsStreaming {
-		header := fmt.Sprintf("─── ask [%s] (generating...) ───", ui.Config.Model)
-		if len(header) > contentWidth {
-			header = header[:contentWidth]
+		// Animated dots loop right-aligned: generating . -> .. -> ... -> .. -> .
+		dots := []string{".", "..", "...", ".."}
+		dot := dots[(time.Now().UnixMilli()/300)%4]
+		streamLabel := "generating " + dot
+		rem := contentWidth - len([]rune(streamLabel)) - 1
+		if rem < 0 {
+			rem = 0
 		}
-		ui.ReversedLines = append(ui.ReversedLines, header)
+		streamHeader := strings.Repeat("─", rem) + " " + streamLabel
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+
 		wrapped := wrapText(ui.StreamContent.String(), contentWidth)
-		ui.ReversedLines = append(ui.ReversedLines, wrapped...)
-		ui.ReversedLines = append(ui.ReversedLines, "")
+		for _, w := range wrapped {
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+		}
+
+		endHeader := strings.Repeat("─", contentWidth)
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 	}
 
 	// 2. Iterate turns in REVERSE chronological order (newest turns appear first!)
 	for i := len(ui.Turns) - 1; i >= 0; i-- {
 		turn := ui.Turns[i]
-		var header string
-		if turn.Role == "user" {
-			header = "─── You ────────────────────────"
+		if turn.Role == "assistant" {
+			// Lean top bar: right-aligned timestamp "hh:mm:ss" (strictly nothing more)
+			ts := turn.Timestamp
+			if ts == "" {
+				ts = time.Now().Format("15:04:05")
+			}
+			rem := contentWidth - len([]rune(ts)) - 1
+			if rem < 0 {
+				rem = 0
+			}
+			startHeader := strings.Repeat("─", rem) + " " + ts
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+
+			wrapped := wrapText(turn.Content, contentWidth)
+			for _, w := range wrapped {
+				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+			}
+
+			// Lean bottom bar
+			endHeader := strings.Repeat("─", contentWidth)
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 		} else {
-			header = fmt.Sprintf("─── ask [%s] ───", ui.Config.Model)
+			// User Turn: normal line above and below with YOU START / YOU END in the middle
+			startLine := formatCenteredLine("YOU START", contentWidth)
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: "USER_LINE"})
+
+			wrapped := wrapText(turn.Content, contentWidth)
+			for _, w := range wrapped {
+				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
+			}
+
+			endLine := formatCenteredLine("YOU END", contentWidth)
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endLine, IsBanner: true, BannerKind: "USER_LINE"})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 		}
-		if len(header) > contentWidth {
-			header = header[:contentWidth]
-		}
-		ui.ReversedLines = append(ui.ReversedLines, header)
-		wrapped := wrapText(turn.Content, contentWidth)
-		ui.ReversedLines = append(ui.ReversedLines, wrapped...)
-		ui.ReversedLines = append(ui.ReversedLines, "") // spacing
 	}
 }
 
@@ -150,7 +302,8 @@ func (ui *ChatUI) MaxPromptBoxHeight() int {
 }
 
 func (ui *ChatUI) PromptVisibleLines() int {
-	linesCount := len(ui.PromptLines)
+	vis := ui.getVisualPromptLines(ui.Width)
+	linesCount := len(vis)
 	if linesCount < 1 {
 		linesCount = 1
 	}
@@ -162,11 +315,19 @@ func (ui *ChatUI) PromptVisibleLines() int {
 }
 
 func (ui *ChatUI) adjustPromptScroll() {
-	vis := ui.PromptVisibleLines()
-	if ui.PromptRow < ui.PromptScroll {
-		ui.PromptScroll = ui.PromptRow
-	} else if ui.PromptRow >= ui.PromptScroll+vis {
-		ui.PromptScroll = ui.PromptRow - vis + 1
+	vis := ui.getVisualPromptLines(ui.Width)
+	visRow, _ := ui.cursorToVis(vis)
+	visCount := len(vis)
+	maxH := ui.MaxPromptBoxHeight()
+	visH := visCount
+	if visH > maxH {
+		visH = maxH
+	}
+
+	if visRow < ui.PromptScroll {
+		ui.PromptScroll = visRow
+	} else if visRow >= ui.PromptScroll+visH {
+		ui.PromptScroll = visRow - visH + 1
 	}
 	if ui.PromptScroll < 0 {
 		ui.PromptScroll = 0
@@ -205,21 +366,17 @@ func (ui *ChatUI) RenderRow(r int) string {
 
 	// 1. Inside Prompt Box (Row 0 .. visPromptLines - 1)
 	if r < visPromptLines {
-		lineIdx := ui.PromptScroll + r
-		prefix := ">>> "
-		if lineIdx > 0 {
-			prefix = "... "
-		}
+		vis := ui.getVisualPromptLines(ui.Width)
+		visIdx := ui.PromptScroll + r
 		text := ""
-		if lineIdx >= 0 && lineIdx < len(ui.PromptLines) {
-			text = ui.PromptLines[lineIdx]
+		if visIdx >= 0 && visIdx < len(vis) {
+			text = vis[visIdx].Text
 		}
-		raw := prefix + text
-		runes := []rune(raw)
+		runes := []rune(text)
 		if len(runes) > ui.Width {
 			return string(runes[:ui.Width])
 		}
-		return raw + strings.Repeat(" ", ui.Width-len(runes))
+		return text + strings.Repeat(" ", ui.Width-len(runes))
 	}
 
 	// 2. Divider Row between Prompt Box and Reversed History
@@ -227,18 +384,57 @@ func (ui *ChatUI) RenderRow(r int) string {
 		title := "─── History (Down Arrow to Browse) "
 		if ui.ActiveRegion == RegionHistory {
 			title = "──● History [Browsing / Ctrl+X to Copy] "
+			rem := ui.Width - len([]rune(title))
+			if rem < 0 {
+				rem = 0
+			}
+			return "\x1b[7;1m" + title + strings.Repeat("─", rem) + "\x1b[0m"
 		}
 		rem := ui.Width - len([]rune(title))
 		if rem < 0 {
 			rem = 0
 		}
-		return title + strings.Repeat("─", rem)
+		return "\x1b[90m" + title + strings.Repeat("─", rem) + "\x1b[0m"
 	}
 
 	// 3. Reversed History Rows (r > dividerRow)
 	histRowIdx := (r - dividerRow - 1) + ui.HistScroll
 	if histRowIdx >= 0 && histRowIdx < len(ui.ReversedLines) {
-		raw := ui.ReversedLines[histRowIdx]
+		line := ui.ReversedLines[histRowIdx]
+		if line.IsBanner {
+			rawRunes := []rune(line.Text)
+			if len(rawRunes) > ui.Width {
+				rawRunes = rawRunes[:ui.Width]
+			}
+			rem := ui.Width - len(rawRunes)
+			if rem < 0 {
+				rem = 0
+			}
+
+			var sb strings.Builder
+			switch line.BannerKind {
+			case "LEAN_LINE":
+				// Lean horizontal rule in dimmed gray (\x1b[90m)
+				sb.WriteString("\x1b[90m")
+				sb.WriteString(string(rawRunes))
+				sb.WriteString(strings.Repeat("─", rem))
+				sb.WriteString("\x1b[0m")
+			case "USER_LINE":
+				// Normal line with YOU START / YOU END in the middle
+				sb.WriteString("\x1b[90m")
+				sb.WriteString(string(rawRunes))
+				sb.WriteString(strings.Repeat("─", rem))
+				sb.WriteString("\x1b[0m")
+			default:
+				sb.WriteString("\x1b[7m")
+				sb.WriteString(string(rawRunes))
+				sb.WriteString(strings.Repeat(" ", rem))
+				sb.WriteString("\x1b[0m")
+			}
+			return sb.String()
+		}
+
+		raw := line.Text
 		runes := []rune(raw)
 
 		var sb strings.Builder
@@ -266,8 +462,10 @@ func (ui *ChatUI) CursorPosition() (row, col int) {
 	defer ui.mu.Unlock()
 
 	if ui.ActiveRegion == RegionPrompt {
-		row = ui.PromptRow - ui.PromptScroll
-		col = ui.PromptCol + 4 // prefix ">>> " or "... "
+		vis := ui.getVisualPromptLines(ui.Width)
+		visRow, visCol := ui.cursorToVis(vis)
+		row = visRow - ui.PromptScroll
+		col = visCol
 		if col >= ui.Width {
 			col = ui.Width - 1
 		}
@@ -326,7 +524,8 @@ func (ui *ChatUI) getSelectedTextLocked() string {
 		if r < 0 || r >= len(ui.ReversedLines) {
 			continue
 		}
-		runes := []rune(ui.ReversedLines[r])
+		rawLine := ui.ReversedLines[r].Text
+		runes := []rune(rawLine)
 		start := 0
 		if r == sR {
 			start = sC
@@ -386,20 +585,9 @@ func (ui *ChatUI) HandleClick(col, row int) {
 	visPrompt := ui.PromptVisibleLines()
 	if row < visPrompt {
 		ui.ActiveRegion = RegionPrompt
-		ui.PromptRow = ui.PromptScroll + row
-		if ui.PromptRow >= len(ui.PromptLines) {
-			ui.PromptRow = len(ui.PromptLines) - 1
-		}
-		ui.PromptCol = col - 4 // skip ">>> " prefix
-		if ui.PromptCol < 0 {
-			ui.PromptCol = 0
-		}
-		if ui.PromptRow >= 0 && ui.PromptRow < len(ui.PromptLines) {
-			curLineLen := len([]rune(ui.PromptLines[ui.PromptRow]))
-			if ui.PromptCol > curLineLen {
-				ui.PromptCol = curLineLen
-			}
-		}
+		vis := ui.getVisualPromptLines(ui.Width)
+		targetVisRow := ui.PromptScroll + row
+		ui.visToCursor(vis, targetVisRow, col)
 		ui.Selecting = false
 	} else if row > visPrompt {
 		ui.ActiveRegion = RegionHistory
@@ -450,6 +638,21 @@ func (ui *ChatUI) GetSelectedText() string {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 	return ui.getSelectedTextLocked()
+}
+
+func (ui *ChatUI) insertNewline() {
+	curLine := ui.PromptLines[ui.PromptRow]
+	runes := []rune(curLine)
+	if ui.PromptCol > len(runes) {
+		ui.PromptCol = len(runes)
+	}
+	before := string(runes[:ui.PromptCol])
+	after := string(runes[ui.PromptCol:])
+
+	ui.PromptLines[ui.PromptRow] = before
+	ui.PromptLines = append(ui.PromptLines[:ui.PromptRow+1], append([]string{after}, ui.PromptLines[ui.PromptRow+1:]...)...)
+	ui.PromptRow++
+	ui.PromptCol = 0
 }
 
 func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
@@ -518,9 +721,10 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	if bytes.Equal(inBuf, []byte("\x1b[A")) { // Up Arrow
 		ui.Selecting = false
 		if ui.ActiveRegion == RegionPrompt {
-			if ui.PromptRow > 0 {
-				ui.PromptRow--
-				ui.clampPromptCol()
+			vis := ui.getVisualPromptLines(ui.Width)
+			visRow, visCol := ui.cursorToVis(vis)
+			if visRow > 0 {
+				ui.visToCursor(vis, visRow-1, visCol)
 				ui.adjustPromptScroll()
 			}
 		} else { // In History
@@ -530,8 +734,8 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			} else {
 				// Transition back up into the Prompt Box!
 				ui.ActiveRegion = RegionPrompt
-				ui.PromptRow = len(ui.PromptLines) - 1
-				ui.clampPromptCol()
+				vis := ui.getVisualPromptLines(ui.Width)
+				ui.visToCursor(vis, len(vis)-1, 0)
 				ui.adjustPromptScroll()
 			}
 		}
@@ -541,9 +745,10 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	if bytes.Equal(inBuf, []byte("\x1b[B")) { // Down Arrow
 		ui.Selecting = false
 		if ui.ActiveRegion == RegionPrompt {
-			if ui.PromptRow < len(ui.PromptLines)-1 {
-				ui.PromptRow++
-				ui.clampPromptCol()
+			vis := ui.getVisualPromptLines(ui.Width)
+			visRow, visCol := ui.cursorToVis(vis)
+			if visRow < len(vis)-1 {
+				ui.visToCursor(vis, visRow+1, visCol)
 				ui.adjustPromptScroll()
 			} else {
 				// Transition down into Reversed History!
@@ -568,7 +773,11 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		if ui.ActiveRegion == RegionPrompt {
 			if ui.PromptCol > 0 {
 				ui.PromptCol--
+			} else if ui.PromptRow > 0 {
+				ui.PromptRow--
+				ui.PromptCol = len([]rune(ui.PromptLines[ui.PromptRow]))
 			}
+			ui.adjustPromptScroll()
 		} else {
 			if ui.HistCol > 0 {
 				ui.HistCol--
@@ -583,7 +792,11 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			curLineLen := len([]rune(ui.PromptLines[ui.PromptRow]))
 			if ui.PromptCol < curLineLen {
 				ui.PromptCol++
+			} else if ui.PromptRow < len(ui.PromptLines)-1 {
+				ui.PromptRow++
+				ui.PromptCol = 0
 			}
+			ui.adjustPromptScroll()
 		} else {
 			ui.HistCol++
 		}
@@ -619,7 +832,8 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		}
 
 		// Add turn to history
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: fullPrompt})
+		nowTs := time.Now().Format("15:04:05")
+		ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs})
 		ui.PromptLines = []string{""}
 		ui.PromptRow = 0
 		ui.PromptCol = 0
@@ -635,17 +849,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		return false
 	}
 
-	// 6. Enter key (13): Newline in prompt!
-	if len(inBuf) == 1 && inBuf[0] == 13 {
-		curLine := ui.PromptLines[ui.PromptRow]
-		runes := []rune(curLine)
-		before := string(runes[:ui.PromptCol])
-		after := string(runes[ui.PromptCol:])
-
-		ui.PromptLines[ui.PromptRow] = before
-		ui.PromptLines = append(ui.PromptLines[:ui.PromptRow+1], append([]string{after}, ui.PromptLines[ui.PromptRow+1:]...)...)
-		ui.PromptRow++
-		ui.PromptCol = 0
+	// 6. Enter key (13 or \r\n): Newline in prompt!
+	if (len(inBuf) == 1 && inBuf[0] == 13) || bytes.Equal(inBuf, []byte("\r\n")) {
+		ui.insertNewline()
 		ui.adjustPromptScroll()
 		return false
 	}
@@ -670,11 +876,18 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		return false
 	}
 
-	// 8. Text insertion into prompt line
+	// 8. Text insertion into prompt line (handles pasted text and newlines)
 	i := 0
 	for i < len(inBuf) {
 		r, size := utf8.DecodeRune(inBuf[i:])
-		if r != utf8.RuneError && r >= 32 {
+		if r == '\r' {
+			if i+size < len(inBuf) && inBuf[i+size] == '\n' {
+				size++
+			}
+			ui.insertNewline()
+		} else if r == '\n' {
+			ui.insertNewline()
+		} else if r != utf8.RuneError && r >= 32 {
 			curLine := ui.PromptLines[ui.PromptRow]
 			runes := []rune(curLine)
 			if ui.PromptCol > len(runes) {
@@ -755,15 +968,16 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 	ui.IsStreaming = false
 	ui.ActiveCancel = nil
 
+	nowTs := time.Now().Format("15:04:05")
 	if response != "" {
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: response})
+		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: response, Timestamp: nowTs})
 		ui.Session.Messages = append(ui.Session.Messages,
 			Message{Role: "user", Content: prompt},
 			Message{Role: "assistant", Content: response},
 		)
 		_ = saveSession(ui.Session)
 	} else if queryErr != nil && queryErr != context.Canceled {
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: fmt.Sprintf("[Error: %v]", queryErr)})
+		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: fmt.Sprintf("[Error: %v]", queryErr), Timestamp: nowTs})
 	}
 	ui.StreamContent.Reset()
 	ui.rebuildReversedLines()

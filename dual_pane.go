@@ -15,7 +15,7 @@ import (
 type ActivePane int
 
 const (
-	PaneLeft  ActivePane = 0 // AI Chatbot (ChatUI)
+	PaneLeft  ActivePane = 0 // ask chat (ChatUI)
 	PaneRight ActivePane = 1 // Live Shell Terminal
 )
 
@@ -46,7 +46,7 @@ func NewDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 		h = 24
 	}
 
-	leftWidth := int(float64(w) * 0.40)
+	leftWidth := (w - 1) / 2
 	rightWidth := w - leftWidth - 1
 	contentHeight := h - 2 // Row 1: Tab Pills, Row 2: Divider Line
 	if contentHeight < 4 {
@@ -99,7 +99,7 @@ func (dp *DualPaneWorkspace) Render() {
 
 	w := dp.Width
 	h := dp.Height
-	leftWidth := int(float64(w) * 0.40)
+	leftWidth := (w - 1) / 2
 	rightWidth := w - leftWidth - 1
 	contentHeight := h - 2
 	if contentHeight < 4 {
@@ -109,24 +109,50 @@ func (dp *DualPaneWorkspace) Render() {
 	var b strings.Builder
 	b.WriteString(ansiHideCursor)
 
-	// 1. Draw Tab Pills Bar (Row 1)
-	leftPill := "  [ 1: ask -i (Chat) ]  "
-	if dp.ActivePane == PaneLeft {
-		leftPill = "\x1b[7m\x1b[1m [ 1: ask -i (Chat) ] \x1b[0m"
+	// 1. Draw Inverted 50/50 Tab Bar (Row 1)
+	var leftTab string
+	tabText := " [1] ask chat"
+	tabRunes := len([]rune(tabText))
+	remLeft := leftWidth - tabRunes
+	if remLeft < 0 {
+		remLeft = 0
 	}
-	rightPill := "  [ 2: Terminal ]  "
-	if dp.ActivePane == PaneRight {
-		rightPill = "\x1b[7m\x1b[1m [ 2: Terminal ] \x1b[0m"
+	if dp.ActivePane == PaneLeft {
+		// Active ask chat: Full reverse video across leftWidth
+		leftTab = "\x1b[7;1m" + tabText + strings.Repeat(" ", remLeft) + "\x1b[0m"
+	} else {
+		// Inactive ask chat: Dimmed
+		leftTab = "\x1b[90m" + tabText + strings.Repeat(" ", remLeft) + "\x1b[0m"
 	}
 
-	hint := "Ctrl+T: Switch | Ctrl+Enter: Send | Ctrl+X: Copy | Ctrl+C: Cancel "
-	tabsLine := leftPill + " │ " + rightPill
-	visibleTabLen := 24 + 3 + 19
-	remaining := w - visibleTabLen - len(hint)
-	if remaining < 0 {
-		remaining = 0
+	divider := "\x1b[90m│\x1b[0m"
+
+	var rightTab string
+	hint := "Ctrl+T | Ctrl+X "
+	if rightWidth >= 55 {
+		hint = "Ctrl+T: Switch | Ctrl+X: Copy "
 	}
-	headerRow := tabsLine + strings.Repeat(" ", remaining) + "\x1b[90m" + hint + "\x1b[0m"
+	title := " [2] Terminal"
+	titleRunes := len([]rune(title))
+	remRight := rightWidth - titleRunes - len(hint)
+	if remRight < 1 {
+		hint = "Ctrl+T "
+		remRight = rightWidth - titleRunes - len(hint)
+	}
+	if remRight < 0 {
+		remRight = 0
+		hint = ""
+	}
+
+	if dp.ActivePane == PaneRight {
+		// Active Terminal: Full reverse video across rightWidth
+		rightTab = "\x1b[7;1m" + title + strings.Repeat(" ", remRight) + "\x1b[2m" + hint + "\x1b[0m"
+	} else {
+		// Inactive Terminal: Dimmed
+		rightTab = "\x1b[90m" + title + strings.Repeat(" ", remRight) + hint + "\x1b[0m"
+	}
+
+	headerRow := leftTab + divider + rightTab
 
 	b.WriteString("\x1b[1;1H\x1b[K")
 	b.WriteString(headerRow)
@@ -223,8 +249,19 @@ func (dp *DualPaneWorkspace) handleInput(inBuf []byte) bool {
 				x, _ := strconv.Atoi(parts[1])
 				y, _ := strconv.Atoi(parts[2])
 
-				leftWidth := int(float64(dp.Width) * 0.40)
+				leftWidth := (dp.Width - 1) / 2
 				row := y - 3 // 0-based content row
+
+				// Click on Tab Bar (Row 1)
+				if y == 1 && btn == 0 && !isRelease {
+					if x <= leftWidth {
+						dp.ActivePane = PaneLeft
+					} else if x > leftWidth+1 {
+						dp.ActivePane = PaneRight
+					}
+					dp.Render()
+					return false
+				}
 
 				// Mouse Wheel
 				if btn == 64 { // Wheel Up
@@ -384,7 +421,7 @@ func RunDualPaneWorkspace(cfg *Config, initialPrompt string, opts QueryOptions) 
 				dp.mu.Lock()
 				dp.Width = w
 				dp.Height = h
-				leftWidth := int(float64(w) * 0.40)
+				leftWidth := (w - 1) / 2
 				rightWidth := w - leftWidth - 1
 				contentHeight := h - 2
 				if contentHeight < 4 {
