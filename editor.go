@@ -226,6 +226,193 @@ func (e *MicroEditor) MoveDown() {
 	}
 }
 
+// formatInlineComposerBox renders the framed box for the inline multiline prompt composer.
+func formatInlineComposerBox(editor *MicroEditor, boxWidth int, targetDesc string) (string, []string, string) {
+	if boxWidth <= 0 || boxWidth < 40 {
+		boxWidth = 80
+	}
+
+	header := "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ] "
+	if targetDesc != "" {
+		header = fmt.Sprintf("─ ask prompt [ Target: %s | Ctrl+Enter: Send | Ctrl+C: Cancel ] ", targetDesc)
+	}
+	headerRunes := utf8.RuneCountInString(header)
+	dashes := ""
+	if headerRunes < boxWidth {
+		dashes = strings.Repeat("─", boxWidth-headerRunes)
+	}
+	topBorder := fmt.Sprintf("\x1b[90m%s%s\x1b[0m", header, dashes)
+
+	contentLines := make([]string, 0, len(editor.Lines))
+	for _, line := range editor.Lines {
+		lineRunes := utf8.RuneCountInString(line)
+		padLen := boxWidth - 2 - lineRunes
+		pad := ""
+		if padLen > 0 {
+			pad = strings.Repeat(" ", padLen)
+		}
+		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;236m  %s%s\x1b[0m", line, pad))
+	}
+
+	bottomBorder := fmt.Sprintf("\x1b[90m%s\x1b[0m", strings.Repeat("─", boxWidth))
+
+	return topBorder, contentLines, bottomBorder
+}
+
+// runInlineComposer executes the micro-editor inline on stdout without entering the alternate screen buffer.
+// It draws a framed box with subtle background tint, and on submit clears the box and prints
+// clean prompt lines directly into the terminal scrollback history.
+// Returns (prompt, isCancelled, error)
+func runInlineComposer(targetDesc string) (string, bool, error) {
+	fd := os.Stdin.Fd()
+	state, err := makeRaw(fd)
+	if err != nil {
+		return "", false, err
+	}
+
+	_, _ = os.Stdout.WriteString(ansiEnablePaste)
+	_ = os.Stdout.Sync()
+
+	var restoreOnce sync.Once
+	restore := func() {
+		restoreOnce.Do(func() {
+			_, _ = os.Stdout.WriteString(ansiDisablePaste)
+			_ = os.Stdout.Sync()
+			_ = restoreTerm(fd, state)
+		})
+	}
+	defer restore()
+
+	editor := NewMicroEditor("", "")
+	prevCursorRow := 0
+	prevRendered := false
+
+	clearBox := func() {
+		if !prevRendered {
+			return
+		}
+		linesUp := prevCursorRow + 1
+		var b strings.Builder
+		if linesUp > 0 {
+			b.WriteString(fmt.Sprintf("\x1b[%dA", linesUp))
+		}
+		b.WriteString("\r\x1b[J")
+		_, _ = os.Stdout.WriteString(b.String())
+		_ = os.Stdout.Sync()
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		<-sigChan
+		clearBox()
+		restore()
+		os.Exit(130)
+	}()
+
+	renderBox := func() {
+		termW, _ := getTerminalSize(fd)
+		boxWidth := termW
+		if boxWidth <= 0 || boxWidth < 40 {
+			boxWidth = 80
+		}
+
+		var b strings.Builder
+		b.WriteString(ansiHideCursor)
+
+		if prevRendered {
+			linesUp := prevCursorRow + 1
+			if linesUp > 0 {
+				b.WriteString(fmt.Sprintf("\x1b[%dA", linesUp))
+			}
+			b.WriteString("\r\x1b[J")
+		}
+
+		top, lines, bottom := formatInlineComposerBox(editor, boxWidth, targetDesc)
+		b.WriteString(top + "\r\n")
+		for _, l := range lines {
+			b.WriteString(l + "\r\n")
+		}
+		b.WriteString(bottom + "\r\n")
+
+		linesUp := len(editor.Lines) + 1 - editor.CursorRow
+		targetCol := 3 + editor.CursorCol
+		if targetCol > boxWidth {
+			targetCol = boxWidth
+		}
+
+		b.WriteString(fmt.Sprintf("\x1b[%dA\r\x1b[%dG", linesUp, targetCol))
+		b.WriteString(ansiShowCursor)
+
+		_, _ = os.Stdout.WriteString(b.String())
+		_ = os.Stdout.Sync()
+
+		prevCursorRow = editor.CursorRow
+		prevRendered = true
+	}
+
+	renderBox()
+
+	buf := make([]byte, 1024)
+	for {
+		n, readErr := os.Stdin.Read(buf)
+		if readErr != nil {
+			if readErr == io.EOF {
+				clearBox()
+				return "", true, nil
+			}
+			return "", false, readErr
+		}
+		if n == 0 {
+			continue
+		}
+
+		input := string(buf[:n])
+
+		// Handle bracketed paste blocks: \x1b[2004~ ... \x1b[2004~
+		if strings.Contains(input, "\x1b[2004~") {
+			parts := strings.Split(input, "\x1b[2004~")
+			for i, part := range parts {
+				if i%2 == 1 {
+					// Inside paste payload: insert all characters verbatim
+					editor.InsertText(part)
+				} else if part != "" {
+					processInput(editor, []byte(part))
+				}
+			}
+			renderBox()
+			continue
+		}
+
+		shouldSubmit, shouldCancel := processInput(editor, buf[:n])
+		if shouldCancel {
+			clearBox()
+			return "", true, nil
+		}
+		if shouldSubmit {
+			content := editor.Content()
+			lower := strings.ToLower(content)
+			if lower == "/exit" || lower == "/quit" || lower == "/q" {
+				clearBox()
+				return "", true, nil
+			}
+
+			// Clear the composer box and print clean prompt lines into terminal history
+			clearBox()
+			for _, line := range editor.Lines {
+				_, _ = os.Stdout.WriteString(line + "\r\n")
+			}
+			_ = os.Stdout.Sync()
+
+			return content, false, nil
+		}
+
+		renderBox()
+	}
+}
+
 // runComposer executes the micro-editor in the alternate screen buffer
 // Returns (prompt, isCancelled, error)
 func runComposer(title, subtitle string) (string, bool, error) {
@@ -473,7 +660,18 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 		// Linefeed (ASCII 10 \n)
 		// In raw mode, byte 10 when sent independently is Ctrl+Enter (or Ctrl+J)!
 		if b == 10 {
-			return true, false
+			if i > 0 && data[i-1] == 13 {
+				// Trailing \n of \r\n from Enter or paste
+				i++
+				continue
+			}
+			if len(data) == 1 {
+				return true, false
+			}
+			// Multiline paste without bracketed paste
+			editor.InsertNewline()
+			i++
+			continue
 		}
 
 		// ANSI Escape Sequences
@@ -596,8 +794,13 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 				}
 			}
 
-			// Unrecognized escape: skip ESC
-			i++
+			// Unrecognized escape: consume full sequence to prevent bleed!
+			seqLen := parseEscapeSeq(rem)
+			if seqLen > 0 {
+				i += seqLen
+			} else {
+				i++
+			}
 			continue
 		}
 

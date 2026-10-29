@@ -205,13 +205,7 @@ func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool
 }
 
 func readInteractivePrompt(targetDesc string) (string, error) {
-	title := fmt.Sprintf("ask v%s — Multiline Prompt Composer", version)
-	subtitle := "Send: Ctrl+Enter | Move: Arrows/Backspace | Cancel: Ctrl+C | Exit: /exit, /q"
-	if targetDesc != "" {
-		subtitle = fmt.Sprintf("Target: %s | Send: Ctrl+Enter | Cancel: Ctrl+C | Exit: /exit, /q", targetDesc)
-	}
-
-	content, isCancelled, err := runComposer(title, subtitle)
+	content, isCancelled, err := runInlineComposer(targetDesc)
 	if err != nil {
 		return "", err
 	}
@@ -250,10 +244,9 @@ func printHelp() {
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
-  ask                           Interactive composer page (Ctrl+Enter to submit)
+  ask                           Inline multiline composer (Ctrl+Enter to submit)
   ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
   ask --chatbot, -i             Start immersive continuous interactive chat session
-  ask --split, -s [<prompt>]    Start side-by-side terminal split (chat on left, shell on right)
   echo "code" | ask "explain"   Pipe stdin to ask
   ask -- <prompt>               Treat everything after -- as literal prompt
 
@@ -268,7 +261,6 @@ Code Generation:
 Chatbot Mode:
   ask --chatbot, -i             Immersive multi-turn chat session in alternate screen
   ask -i <prompt>               Start chat mode with an initial prompt
-  ask --split, -s [<prompt>]    Side-by-side terminal split (chat on left, shell on right)
 
 Session Memory:
   ask --clear, -c               Clear current terminal's conversation history

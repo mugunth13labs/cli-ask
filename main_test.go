@@ -546,3 +546,60 @@ func TestWrapText(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatInlineComposerBox(t *testing.T) {
+	ed := NewMicroEditor("", "")
+	ed.Lines = []string{"how do I check open ports in linux?", "preferably with ss"}
+	top, lines, bottom := formatInlineComposerBox(ed, 80, "")
+
+	if !strings.Contains(top, "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ]") {
+		t.Errorf("expected header in top border, got: %q", top)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 content lines, got %d", len(lines))
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, "\x1b[48;5;236m  ") {
+			t.Errorf("expected subtle tint and 2 spaces margin in content line, got: %q", l)
+		}
+	}
+	if !strings.Contains(bottom, "───") {
+		t.Errorf("expected bottom border dashes, got: %q", bottom)
+	}
+
+	// With target description
+	topTarget, _, _ := formatInlineComposerBox(ed, 80, "main.go")
+	if !strings.Contains(topTarget, "Target: main.go") {
+		t.Errorf("expected Target: main.go in top border, got: %q", topTarget)
+	}
+}
+
+func TestProcessInputLinefeedAndEscape(t *testing.T) {
+	ed := NewMicroEditor("", "")
+
+	// 1. Standalone byte 10 (Ctrl+Enter) submits
+	submit, cancel := processInput(ed, []byte{10})
+	if !submit || cancel {
+		t.Errorf("expected standalone byte 10 to submit, got submit=%v cancel=%v", submit, cancel)
+	}
+
+	// 2. \r\n from Enter or paste does NOT submit
+	ed2 := NewMicroEditor("", "")
+	submit, cancel = processInput(ed2, []byte{13, 10})
+	if submit || cancel {
+		t.Errorf("expected \\r\\n to NOT submit, got submit=%v cancel=%v", submit, cancel)
+	}
+	if len(ed2.Lines) != 2 {
+		t.Errorf("expected 2 lines after \\r\\n, got %d", len(ed2.Lines))
+	}
+
+	// 3. Batched escape sequence does NOT bleed
+	ed3 := NewMicroEditor("", "")
+	submit, cancel = processInput(ed3, []byte("\x1b[A\x1b[B"))
+	if submit || cancel {
+		t.Errorf("unexpected submit/cancel for arrow keys")
+	}
+	if ed3.Lines[0] != "" {
+		t.Errorf("expected empty line without bleed, got %q", ed3.Lines[0])
+	}
+}
