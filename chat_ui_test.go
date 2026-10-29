@@ -118,8 +118,8 @@ func TestPromptComposerWordWrappingAndNoPrefix(t *testing.T) {
 	if strings.Contains(renderedRow0, ">>>") || strings.Contains(renderedRow0, "...") {
 		t.Fatalf("expected prompt row to NOT contain '>>>' or '...', got: %q", renderedRow0)
 	}
-	if !strings.HasPrefix(renderedRow0, "hello world") {
-		t.Fatalf("expected prompt row to start at column 0 with 'hello world', got: %q", renderedRow0)
+	if !strings.Contains(renderedRow0, "hello world") {
+		t.Fatalf("expected prompt row to contain 'hello world', got: %q", renderedRow0)
 	}
 
 	// Verify cursor starts at column 11 with no +4 offset
@@ -196,5 +196,84 @@ func TestModelResponseBarLeanAndTimestampOnly(t *testing.T) {
 	}
 	if strings.Contains(topBanner.Text, "my-custom-model") || strings.Contains(topBanner.Text, "ask [") {
 		t.Fatalf("expected model name to NOT appear in response bar, got: %q", topBanner.Text)
+	}
+
+	// Verify no end line exists in the turn
+	for _, l := range chat.ReversedLines {
+		if l.IsBanner && l.Text == strings.Repeat("─", 48) {
+			t.Fatalf("expected NO end line in response turn, but found: %+v", l)
+		}
+	}
+}
+
+func TestStreamingStaticGeneratingLabel(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 50, 15)
+
+	chat.IsStreaming = true
+	chat.StreamContent.WriteString("Hello stream")
+	chat.rebuildReversedLines()
+
+	if len(chat.ReversedLines) == 0 {
+		t.Fatal("expected reversed lines to be populated during streaming")
+	}
+
+	topBanner := chat.ReversedLines[0]
+	if !topBanner.IsBanner || topBanner.BannerKind != "LEAN_LINE" {
+		t.Fatalf("expected top banner to be LEAN_LINE, got: %+v", topBanner)
+	}
+	if !strings.Contains(topBanner.Text, "generating") {
+		t.Fatalf("expected banner to contain 'generating', got: %q", topBanner.Text)
+	}
+	if strings.Contains(topBanner.Text, "generating .") {
+		t.Fatalf("expected NO animated dots in generating text, got: %q", topBanner.Text)
+	}
+
+	// Verify no bottom border exists
+	for _, l := range chat.ReversedLines {
+		if l.IsBanner && l.Text == strings.Repeat("─", 48) {
+			t.Fatalf("expected NO end line during streaming, but found: %+v", l)
+		}
+	}
+}
+
+func TestUserPromptLeftAlignedAndNoEndLines(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 50, 15)
+
+	chat.Turns = append(chat.Turns, ChatTurn{
+		Role:      "user",
+		Content:   "What is Go?",
+		Timestamp: "19:00:00",
+	})
+	chat.rebuildReversedLines()
+
+	if len(chat.ReversedLines) == 0 {
+		t.Fatal("expected reversed lines for user turn")
+	}
+
+	topBanner := chat.ReversedLines[0]
+	if !topBanner.IsBanner || topBanner.BannerKind != "USER_LINE" {
+		t.Fatalf("expected top banner to be USER_LINE, got: %+v", topBanner)
+	}
+	if !strings.HasPrefix(topBanner.Text, "─ prompt 19:00:00 ") {
+		t.Fatalf("expected left-aligned prompt header '─ prompt 19:00:00 ', got: %q", topBanner.Text)
+	}
+
+	// Verify absence of YOU START and YOU END
+	for _, l := range chat.ReversedLines {
+		if strings.Contains(l.Text, "YOU START") || strings.Contains(l.Text, "YOU END") {
+			t.Fatalf("expected no YOU START / YOU END in lines, found: %q", l.Text)
+		}
+	}
+}
+
+func TestPromptBoxSubtleTint(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "tint test", 40, 10)
+
+	row0 := chat.RenderRow(0)
+	if !strings.Contains(row0, "\x1b[48;5;236m") {
+		t.Fatalf("expected prompt box row 0 to contain background tint \\x1b[48;5;236m, got: %q", row0)
 	}
 }

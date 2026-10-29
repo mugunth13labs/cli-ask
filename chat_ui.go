@@ -226,24 +226,19 @@ func (ui *ChatUI) rebuildReversedLines() {
 
 	// 1. If currently streaming, place live assistant turn at the very top of history!
 	if ui.IsStreaming {
-		// Animated dots loop right-aligned: generating . -> .. -> ... -> .. -> .
-		dots := []string{".", "..", "...", ".."}
-		dot := dots[(time.Now().UnixMilli()/300)%4]
-		streamLabel := "generating " + dot
-		rem := contentWidth - len([]rune(streamLabel)) - 1
+		// Static right-aligned "generating" (no animated dots)
+		label := "generating"
+		rem := contentWidth - len([]rune(label)) - 1
 		if rem < 0 {
 			rem = 0
 		}
-		streamHeader := strings.Repeat("─", rem) + " " + streamLabel
+		streamHeader := strings.Repeat("─", rem) + " " + label
 		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
 
 		wrapped := wrapText(ui.StreamContent.String(), contentWidth)
 		for _, w := range wrapped {
 			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
 		}
-
-		endHeader := strings.Repeat("─", contentWidth)
-		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
 		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 	}
 
@@ -267,23 +262,25 @@ func (ui *ChatUI) rebuildReversedLines() {
 			for _, w := range wrapped {
 				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
 			}
-
-			// Lean bottom bar
-			endHeader := strings.Repeat("─", contentWidth)
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endHeader, IsBanner: true, BannerKind: "LEAN_LINE"})
 			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 		} else {
-			// User Turn: normal line above and below with YOU START / YOU END in the middle
-			startLine := formatCenteredLine("YOU START", contentWidth)
+			// User Turn: left-aligned "─ prompt hh:mm:ss ──────"
+			ts := turn.Timestamp
+			if ts == "" {
+				ts = time.Now().Format("15:04:05")
+			}
+			headerText := "─ prompt " + ts + " "
+			rem := contentWidth - len([]rune(headerText))
+			if rem < 0 {
+				rem = 0
+			}
+			startLine := headerText + strings.Repeat("─", rem)
 			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: "USER_LINE"})
 
 			wrapped := wrapText(turn.Content, contentWidth)
 			for _, w := range wrapped {
 				ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: w})
 			}
-
-			endLine := formatCenteredLine("YOU END", contentWidth)
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: endLine, IsBanner: true, BannerKind: "USER_LINE"})
 			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: ""}) // spacing
 		}
 	}
@@ -374,9 +371,11 @@ func (ui *ChatUI) RenderRow(r int) string {
 		}
 		runes := []rune(text)
 		if len(runes) > ui.Width {
-			return string(runes[:ui.Width])
+			text = string(runes[:ui.Width])
+		} else {
+			text = text + strings.Repeat(" ", ui.Width-len(runes))
 		}
-		return text + strings.Repeat(" ", ui.Width-len(runes))
+		return "\x1b[48;5;236m" + text + "\x1b[0m"
 	}
 
 	// 2. Divider Row between Prompt Box and Reversed History
