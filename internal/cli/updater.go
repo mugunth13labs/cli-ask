@@ -49,10 +49,7 @@ func selfUpdate() error {
 		return fmt.Errorf("failed to parse release info: %w", err)
 	}
 
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
-	currentVersion := strings.TrimPrefix(version, "v")
-
-	if latestVersion == currentVersion {
+	if normalizeVersion(release.TagName) == normalizeVersion(version) {
 		fmt.Printf("ask is already up to date (v%s).\n", version)
 		return nil
 	}
@@ -137,4 +134,13 @@ func selfUpdate() error {
 
 	fmt.Printf("Successfully updated ask to %s!\n", release.TagName)
 	return nil
+}
+
+func normalizeVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.Split(v, ".")
+	for len(parts) < 3 {
+		parts = append(parts, "0")
+	}
+	return strings.Join(parts, ".")
 }

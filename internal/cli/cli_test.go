@@ -645,3 +645,23 @@ func TestProcessInputLinefeedAndEscape(t *testing.T) {
 		t.Errorf("expected empty line without bleed, got %q", ed3.Lines[0])
 	}
 }
+
+func TestNormalizeVersion(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"v0.4.0", "0.4.0"},
+		{"v0.4", "0.4.0"},
+		{"0.4", "0.4.0"},
+		{"0.4.0", "0.4.0"},
+		{"v1", "1.0.0"},
+		{"v1.2.3", "1.2.3"},
+	}
+	for _, c := range cases {
+		got := normalizeVersion(c.input)
+		if got != c.expected {
+			t.Errorf("expected %q for %q, got %q", c.expected, c.input, got)
+		}
+	}
+}
