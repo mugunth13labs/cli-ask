@@ -1,98 +1,81 @@
-# ask — The Lean Terminal AI
+# ask
 
-> *"Fast, focused, and stays out of your way."*
+**The lean, zero-dependency AI companion for your command line.**
 
-`ask` is a lightweight, zero-dependency command-line AI companion built in pure Go. It delivers instant, high-quality answers directly in your shell—without heavy runtimes, sluggish full-screen TUIs, or bloated frameworks.
+`ask` brings AI intelligence straight to your terminal. It starts instantly, streams answers in real time, and follows the Unix philosophy: do one thing, do it fast, and stay out of your way.
 
 ```bash
-# 1. Quick command lookups
-$ ask "tar command to extract without verbose"
+# Quick command lookups
+$ ask tar command to extract without verbose
 tar -xf archive.tar.gz
 
-# 2. Natural unquoted questions
-$ ask how to kill process by port in linux
-fuser -k <port>/tcp
-# or
-lsof -ti :<port> | xargs kill -9
+# Pipe logs or diffs directly into queries
+$ git diff | ask "summarize these changes"
+$ docker logs web-api --tail 50 | ask "what caused this 500 error?"
 
-# 3. Unix piping for logs and diffs
-$ git diff | ask "review this diff for potential bugs"
-$ journalctl -u nginx --no-pager -n 50 | ask "why is nginx failing?"
+# Generate runnable code straight to a file
+$ ask -o setup.sh "write a bash script to install and configure nginx"
 
-# 4. Pure code generation directly to file
-$ ask -o backup.sh "write a bash script to rsync /var/data to remote storage"
+# Open interactive chat
+$ ask -i
 ```
 
 ---
 
-## Why `ask`?
+## Highlights
 
-Most AI command-line tools make a fundamental mistake: **they get in your way.**
-
-They trap you inside sluggish full-screen interfaces, demand Python/Node dependencies, start background agent loops you didn't ask for, or leak conversation context between unrelated terminal windows.
-
-`ask` adheres strictly to the **Unix Philosophy**:
-
-- ⚡ **Pure Go & Zero Dependencies**: Single static binary (~10MB), instant startup (<10ms). No Python venvs, no npm packages, no Docker daemon required.
-- 📝 **Inline Micro-Editor**: Running `ask` with no prompt opens a clean, framed multi-line composer right inside your terminal. It expands up to a 5-line sliding viewport so it never covers your screen or traps your cursor. Press `Ctrl+Enter` to send, and your prompt drops cleanly into your terminal scrollback history.
-- 💬 **Interactive Chat (`ask -i`)**: Continuous conversation mode with persistent session context, live model validation (`/model <name>`), mouse text selection, visual copy hints (`y`/`Enter`/`Ctrl+Shift+C`), and clean terminal restoration on exit.
-- 💻 **Pure Code Generation (`--cg`, `--codegen`)**: Outputs raw, executable code starting directly with shebangs or declarations—zero markdown code fences, zero conversational fluff. Automatically activates when saving to `.sh`, `.py`, `.yaml`, etc.
-- 📁 **Direct File Integration (`-o`, `-a`)**: Write or append AI responses directly to files with clean live progress reporting on stderr (`[streaming to output...] -> [done]`).
-- 🧠 **Shell-Scoped Session Memory**: Context is strictly scoped to your active shell process (PPID). Two terminal tabs or tmux panes never bleed context into each other. Long sessions auto-compact without blowing out context windows.
-- 🆓 **Free Tier by Default**: Pre-configured with top-performing free models on OpenRouter (e.g. `nvidia/nemotron-3.5-lightning:free`). Switch models anytime with `ask --set-model` or in-chat `/model`.
-- 🔄 **Built-In Self-Updater**: Stay on the latest release with one command: `ask --update-self`.
+- **Lightning Fast**: Single static binary written in pure Go. Starts in under 10ms with zero runtime dependencies.
+- **Inline Multi-Line Composer**: Run `ask` with no arguments to type or paste multi-line prompts and scripts directly in your shell.
+- **Interactive Chat (`ask -i`)**: Continuous back-and-forth dialogue with session memory, mouse text selection, and on-the-fly model switching.
+- **Pure Code Generation (`--cg`, `-o`, `-a`)**: Generates raw, executable code without markdown code fences or conversational filler—ready to run or pipe.
+- **Shell-Scoped Context**: Remembers conversation history within your active terminal tab without leaking across unrelated windows or tmux panes.
+- **Unix Piping**: Seamlessly inspect piped output from `git`, `docker`, `journalctl`, `curl`, and other standard tools.
+- **Free Models by Default**: Powered by OpenRouter, pre-configured with high-performance free models.
+- **Self-Updating**: Keep up to date with a single command: `ask --update-self`.
 
 ---
 
 ## Installation
 
-### Linux & macOS (One-line install)
+### Linux & macOS
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.sh | sh
 ```
 
-### Windows (PowerShell one-line install)
+### Windows (PowerShell)
 ```powershell
 irm https://raw.githubusercontent.com/mugunth13labs/cli-ask/main/install.ps1 | iex
 ```
 
-### Updating `ask`
-To update an existing installation to the latest version:
-```bash
-ask --update-self
-```
-*(On Linux/macOS, use `sudo ask --update-self` if installed in `/usr/local/bin`).*
-
-### Manual Binary Download
-Pre-compiled standalone binaries are available on the [Releases](https://github.com/mugunth13labs/cli-ask/releases) page:
-- **Linux**: `ask-linux-amd64`, `ask-linux-arm64`
-- **macOS**: `ask-darwin-arm64` (Apple Silicon), `ask-darwin-amd64` (Intel)
-- **Windows**: `ask-windows-amd64.exe`
+### Manual Download
+Pre-compiled standalone binaries are available on the [Releases](https://github.com/mugunth13labs/cli-ask/releases) page for Linux, macOS (Apple Silicon & Intel), and Windows.
 
 ---
 
-## Quick Setup
+## Quick Start
 
-1. Get a free API key at [OpenRouter](https://openrouter.ai/settings/keys).
-2. Save your key locally:
+1. Get a free API key from [OpenRouter](https://openrouter.ai/settings/keys).
+2. Save your key:
 ```bash
 ask --set-key sk-or-v1-xxxxxxxx
 ```
-*(Alternatively, set `export OPENROUTER_API_KEY="sk-or-v1-..."` in your shell environment).*
+*(Or set `export OPENROUTER_API_KEY="sk-or-v1-..."` in your shell).*
+
+That's it! You're ready to use `ask`.
 
 ---
 
-## Usage Guide
+## Usage
 
-### 1. Direct Queries
-Pass single-line queries with or without quotes:
+### 1. One-Shot Queries
+Ask questions with or without quotes:
 ```bash
-ask "explain how to configure a systemd service"
+ask "how to find files larger than 100MB in linux"
 ask what does the -F flag do in awk
 ```
 
-### 2. Inline Multiline Composer
-Run `ask` without prompt arguments to compose multi-line prompts directly in your terminal:
+### 2. Multi-Line Composer
+Run `ask` by itself to write or paste multi-line prompts, code snippets, or error traces:
 ```bash
 $ ask
 ```
@@ -102,65 +85,54 @@ $ ask
   and alerts via webhook when / exceeds 90%.
 ────────────────────────────────────────────────────────────────────────────
 ```
-- **Viewport Clamped**: Automatically restricted to 5 lines maximum with a sliding window so your existing terminal output remains visible.
-- **Scroll Indicators**: Subtly indicates `[ ▲ N above ]` or `[ ▼ N more below ]` when lines exceed the visible viewport.
-- **`Enter`**: Inserts a newline for multi-line prompts and code blocks.
-- **`Ctrl+Enter`**: Sends the prompt.
-- **`Ctrl+C`**: Cancels and closes the box cleanly.
-- **Clean Submission**: When submitted, the box disappears and prints your full prompt directly into your terminal scrollback history.
+- Press `Enter` for a new line.
+- Press `Ctrl+Enter` to submit.
+- Press `Ctrl+C` to cancel.
 
-### 3. Continuous Chatbot Mode (`ask -i`)
-Launch interactive conversation mode when you need an ongoing back-and-forth dialogue:
+### 3. Interactive Chat (`ask -i`)
+Launch continuous chat mode for deep technical discussions or iterative problem-solving:
 ```bash
 $ ask -i
 ```
-- **Top Status Bar**: Displays current mode and context-aware shortcuts.
-- **Model Validation**: Switch models dynamically with `/model <name>`. Validates against OpenRouter models; if an invalid model is entered, it informs you and safely retains your previous model.
-- **Mouse Selection & Quick Copy**: Click or drag with your mouse to highlight text in history. Press `y`, `Enter`, or `Ctrl+Shift+C` to copy the selected text straight to your system clipboard without prompt markers.
-- **Smooth Navigation**: Scroll history with Mouse Wheel or `PageUp`/`PageDown`/`Up`/`Down`.
-- **Clean Exit**: Press `Ctrl+C` or type `/exit` / `/quit` / `/q`. Restores your terminal buffer cleanly with zero mouse artifacts.
+- **Session Memory**: Remembers context across turns.
+- **Mouse Selection**: Click and drag to select text in chat history, then press `y`, `Enter`, or `Ctrl+Shift+C` to copy to clipboard.
+- **In-Chat Commands**:
+  - `/model <name>` — Switch AI model (e.g. `/model anthropic/claude-3.5-sonnet`)
+  - `/clear` — Reset conversation history
+  - `/help` — View commands
+  - `/exit` or `Ctrl+C` — Exit back to shell
 
-### 4. Pure Code Generation (`--cg`, `--codegen`)
-When generating or refactoring scripts, configs, or code, use `--cg` to ensure the output contains strictly raw, executable code without conversational filler or markdown code fences:
+### 4. Code Generation
+Generate raw, executable scripts or configurations:
 ```bash
-# Explicit code generation
-ask --cg "write a python function to compute fibonacci"
+# Generate pure code to stdout
+ask --cg "write a python function to compute fibonacci numbers"
 
-# Generate a script directly to a file (auto-activates codegen)
-ask -o deploy.sh "create a bash deploy script with error trapping"
+# Save directly to a file
+ask -o deploy.sh "create a bash deployment script with error handling"
 
-# Refactor an existing script via pipe
-cat deploy.sh | ask "add slack notification on failure" > deploy_v2.sh
+# Append configuration to an existing file
+ask -a docker-compose.yml "add redis with persistent storage"
 ```
-`ask` automatically enables codegen mode when saving to code extensions (`.sh`, `.py`, `.go`, `.rs`, `.yaml`, `.json`, `.sql`, etc.) or when piped input contains code.
+*(Code generation mode activates automatically when outputting to code file extensions).*
 
-### 5. Direct File Output (`-o`, `-a`)
-Save or append responses directly to files:
-```bash
-# Overwrite or create file
-ask -o docker-compose.yml "create a compose file for postgres and redis"
-
-# Append to an existing notes file
-ask -a docker-compose.yml "add healthchecks and volume mounts"
-```
-
-### 6. Standard Unix Piping
-Feed command outputs, logs, or diffs directly into `ask`:
+### 5. Pipes & Logs
+Feed command outputs directly into `ask`:
 ```bash
 # Debug system logs
-journalctl -xe --no-pager | tail -n 50 | ask "what caused this failure?"
+journalctl -u postgresql -n 50 --no-pager | ask "why did the service fail to start?"
 
-# Review git diffs
-git diff | ask "review this diff for potential performance regressions"
+# Review git changes
+git diff HEAD~1 | ask "identify any security risks in this diff"
 
-# Inspect active services
-netstat -tulpn | ask "which ports are exposed publicly?"
+# Analyze network status
+ss -tulpn | ask "which ports are exposed to the public internet?"
 ```
 
-### 7. Managing Models
-Check configuration or switch your default AI model:
+### 6. Changing Models
+Check your settings or switch default models anytime:
 ```bash
-# View active configuration and model
+# View current configuration
 ask --config
 
 # Switch default model
@@ -169,41 +141,33 @@ ask --set-model deepseek/deepseek-r1:free
 ask --set-model anthropic/claude-3.5-sonnet
 ```
 
-### 8. Session Controls
+### 7. Session Management
 ```bash
-# Clear session context for the current terminal tab
-ask --clear   # or ask -c
+# Clear session memory for current terminal tab
+ask --clear
 
-# Run a one-off query without reading or recording session memory
+# Run a one-off query without reading or recording history
 ask --no-context "what is the default ssh port?"
 ```
 
 ---
 
-## Keyboard Shortcuts Reference
+## Command Reference
 
-| Context | Key / Command | Action |
-| :--- | :--- | :--- |
-| **Inline Composer** | `Ctrl+Enter` | Send multiline prompt |
-| | `Enter` | Insert newline |
-| | `Arrow Keys` | Move cursor across lines & columns |
-| | `Backspace` | Character backspace (merges across lines at column 0) |
-| | `Ctrl+C` | Cancel and exit composer |
-| **Interactive Chat (`-i`)** | `Ctrl+Enter` | Send prompt turn |
-| | `Enter` | Insert newline in prompt box |
-| | `Mouse Wheel` | Scroll conversation history |
-| | `Mouse Drag` | Select text in history |
-| | `y` / `Enter` / `Ctrl+Shift+C` | Copy selected text to clipboard |
-| | `/model <name>` | Switch active model on the fly |
-| | `/clear` | Clear chat history & session context |
-| | `/help` | Show command help |
-| | `/exit` / `/quit` / `Ctrl+C` | Exit chat and restore terminal |
-
----
-
-## Packaging & Debian
-
-`cli-ask` complies with Debian Policy (§4.7.0) with zero external dependencies, standard roff manpage documentation (`man ask`), and full DFSG compliance. Packaging source files and ITP templates are located in [`debian/`](debian/).
+| Command / Flag | Description |
+| :--- | :--- |
+| `ask <prompt>` | Run a one-shot query |
+| `ask` | Open the inline multi-line prompt composer |
+| `ask -i`, `ask --chatbot` | Launch interactive chat mode |
+| `ask --cg`, `--codegen` | Force pure code output (no fences or commentary) |
+| `ask -o <file>` | Save response directly to file (overwrites) |
+| `ask -a <file>` | Append response directly to file |
+| `ask --no-context` | Run query without session history |
+| `ask --clear`, `ask -c` | Clear session context for current shell |
+| `ask --set-key <key>` | Save OpenRouter API key |
+| `ask --set-model <model>` | Set default AI model |
+| `ask --config` | Display current configuration |
+| `ask --update-self` | Update `ask` binary to the latest release |
 
 ---
 
