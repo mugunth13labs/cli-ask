@@ -1,3 +1,13 @@
+cli-ask (0.4.2-1) unstable; urgency=medium
+
+  * Fix Ctrl+Enter submission on terminal emulators that swallow Ctrl modifier with Enter.
+  * Enable Kitty Keyboard Protocol (CSI > 1 u) and xterm modifyOtherKeys (CSI > 4 ; 2 m) on raw mode entry.
+  * Add universal Ctrl+S and Alt+Enter alternative submit shortcuts for terminals intercepting Ctrl+Enter.
+  * Cleanly restore terminal keyboard flags on composer exit and alternate screen cleanup.
+  * Update man page and documentation with universal submit shortcuts.
+
+ -- Mugunthan <mugunth13@proton.me>  Fri, 30 Oct 2026 15:30:00 +0800
+
 cli-ask (0.4.0-1) unstable; urgency=medium
 
   * Add inline multiline framed composer for interactive ask without arguments.

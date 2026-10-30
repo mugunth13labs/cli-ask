@@ -833,7 +833,14 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 			"  /clear, /c         Clear chat history & session context\n" +
 			"  /model <name>      Switch AI model on the fly (or view current)\n" +
 			"  /help, /?          Show this help message\n" +
-			"  /exit, /quit, /q   Exit ask chat"
+			"  /exit, /quit, /q   Exit ask chat\n\n" +
+			"keyboard shortcuts:\n" +
+			"  Ctrl+Enter         Send prompt\n" +
+			"  Ctrl+S / Alt+Enter Alternative send shortcuts (for terminals intercepting Ctrl+Enter)\n" +
+			"  Enter              Insert newline in prompt\n" +
+			"  Up / Down          Navigate history & prompt\n" +
+			"  Shift+Arrows       Select text in history\n" +
+			"  Ctrl+X / y / c     Copy selected text"
 		nowTs := time.Now().Format("15:04:05")
 		ui.Turns = append(ui.Turns,
 			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
@@ -971,8 +978,19 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				continue
 			}
 
-			// 1c. Ctrl+Enter via CSI u: \x1b[13;5u or \x1b[27;5;13~
-			if bytes.Equal(seq, []byte("\x1b[13;5u")) || bytes.Equal(seq, []byte("\x1b[27;5;13~")) {
+			// 1c. Ctrl+Enter / Alt+Enter / Ctrl+S submit sequences
+			if bytes.Equal(seq, []byte("\x1b[13;5u")) ||
+				bytes.Equal(seq, []byte("\x1b[27;5;13~")) ||
+				bytes.Equal(seq, []byte("\x1b[10;5u")) ||
+				bytes.Equal(seq, []byte("\x1b[27;5;10~")) ||
+				bytes.Equal(seq, []byte("\x1b[10~")) ||
+				bytes.Equal(seq, []byte("\x1b[13~")) ||
+				bytes.Equal(seq, []byte("\x1b\r")) ||
+				bytes.Equal(seq, []byte("\x1b\n")) ||
+				bytes.Equal(seq, []byte("\x1b[115;5u")) ||
+				bytes.Equal(seq, []byte("\x1b[83;5u")) ||
+				bytes.Equal(seq, []byte("\x1b[27;5;115~")) ||
+				bytes.Equal(seq, []byte("\x1b[27;5;83~")) {
 				if ui.submitPrompt() {
 					return true
 				}
@@ -1020,6 +1038,23 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				continue
 			}
 			return true
+		}
+
+		// STRICT: Ctrl+D (4) and Ctrl+Z (26) -> Ignore, never submit or insert
+		if b == 4 || b == 26 {
+			offset++
+			continue
+		}
+
+		// Ctrl+S (19): Submit prompt (universal alternative to Ctrl+Enter)
+		if b == 19 {
+			offset++
+			if ui.ActiveRegion == RegionPrompt {
+				if ui.submitPrompt() {
+					return true
+				}
+			}
+			continue
 		}
 
 		// Ctrl+X (24): Copy selection
@@ -1091,7 +1126,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 
 		// Collect contiguous text bytes up to next control/escape char
 		end := offset
-		for end < len(inBuf) && inBuf[end] != 0x1b && inBuf[end] != 3 && inBuf[end] != 24 && inBuf[end] != 10 && inBuf[end] != 13 && inBuf[end] != 127 && inBuf[end] != 8 {
+		for end < len(inBuf) && inBuf[end] != 0x1b && inBuf[end] != 3 && inBuf[end] != 4 && inBuf[end] != 19 && inBuf[end] != 26 && inBuf[end] != 24 && inBuf[end] != 10 && inBuf[end] != 13 && inBuf[end] != 127 && inBuf[end] != 8 {
 			end++
 		}
 		textBytes := inBuf[offset:end]

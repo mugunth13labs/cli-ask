@@ -480,3 +480,57 @@ func TestChatUICtrlShiftCCopy(t *testing.T) {
 		t.Fatal("Ctrl+Shift+C should not trigger exit")
 	}
 }
+
+func TestChatUIAlternativeSubmitAndIgnoreRules(t *testing.T) {
+	cfg := &Config{Model: "openai/gpt-4o-mini"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
+
+	// 1. Ctrl+S (ASCII 19) submits prompt
+	chat.PromptLines = []string{"test ctrl+s submit"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("test ctrl+s submit")
+	chat.HandleKey([]byte{19})
+	if len(chat.Turns) == 0 || chat.Turns[len(chat.Turns)-1].Content != "test ctrl+s submit" {
+		t.Fatalf("expected turn submitted with Ctrl+S, got turns: %+v", chat.Turns)
+	}
+
+	// 2. Alt+Enter (\x1b\r) submits prompt
+	chat.PromptLines = []string{"test alt+enter submit"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("test alt+enter submit")
+	chat.HandleKey([]byte("\x1b\r"))
+	if len(chat.Turns) < 2 || chat.Turns[len(chat.Turns)-1].Content != "test alt+enter submit" {
+		t.Fatalf("expected turn submitted with Alt+Enter, got turns: %+v", chat.Turns)
+	}
+
+	// 3. Kitty Ctrl+S (\x1b[115;5u) submits prompt
+	chat.PromptLines = []string{"test kitty ctrl+s submit"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("test kitty ctrl+s submit")
+	chat.HandleKey([]byte("\x1b[115;5u"))
+	if len(chat.Turns) < 3 || chat.Turns[len(chat.Turns)-1].Content != "test kitty ctrl+s submit" {
+		t.Fatalf("expected turn submitted with Kitty Ctrl+S, got turns: %+v", chat.Turns)
+	}
+
+	// 4. Ctrl+D (byte 4) is STRICTLY IGNORED: must NOT submit and must NOT insert character
+	initialTurns := len(chat.Turns)
+	chat.PromptLines = []string{"prompt before ctrl+d"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("prompt before ctrl+d")
+	chat.HandleKey([]byte{4})
+	if len(chat.Turns) != initialTurns {
+		t.Fatalf("STRICT RULE BROKEN: Ctrl+D must NOT submit prompt")
+	}
+	if chat.PromptLines[0] != "prompt before ctrl+d" {
+		t.Fatalf("STRICT RULE BROKEN: Ctrl+D must not modify prompt, got: %q", chat.PromptLines[0])
+	}
+
+	// 5. Ctrl+Z (byte 26) is STRICTLY IGNORED: must NOT submit and must NOT insert character
+	chat.HandleKey([]byte{26})
+	if len(chat.Turns) != initialTurns {
+		t.Fatalf("STRICT RULE BROKEN: Ctrl+Z must NOT submit prompt")
+	}
+	if chat.PromptLines[0] != "prompt before ctrl+d" {
+		t.Fatalf("STRICT RULE BROKEN: Ctrl+Z must not modify prompt, got: %q", chat.PromptLines[0])
+	}
+}

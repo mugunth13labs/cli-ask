@@ -86,7 +86,7 @@ $ ask
 ────────────────────────────────────────────────────────────────────────────
 ```
 - Press `Enter` for a new line.
-- Press `Ctrl+Enter` to submit.
+- Press `Ctrl+Enter` (or `Ctrl+S` / `Alt+Enter`) to submit.
 - Press `Ctrl+C` to cancel.
 
 ### 3. Interactive Chat (`ask -i`)
@@ -96,6 +96,12 @@ $ ask -i
 ```
 - **Session Memory**: Remembers context across turns.
 - **Mouse Selection**: Click and drag to select text in chat history, then press `y`, `Enter`, or `Ctrl+Shift+C` to copy to clipboard.
+- **Keyboard Shortcuts**:
+  - `Ctrl+Enter` (or `Ctrl+S` / `Alt+Enter`) — Send prompt
+  - `Enter` — Insert newline in prompt
+  - `Up` / `Down` — Navigate history & prompt
+  - `Shift+Arrows` — Highlight text in history
+  - `y`, `Enter`, or `Ctrl+Shift+C` — Copy selection to clipboard
 - **In-Chat Commands**:
   - `/model <name>` — Switch AI model (e.g. `/model anthropic/claude-3.5-sonnet`)
   - `/clear` — Reset conversation history

@@ -54,11 +54,34 @@ func readChatPromptCooked(reader *bufio.Reader) (string, error) {
 			}
 		}
 
-		// Detect terminal escape sequences for Ctrl+Enter (CSI u and xterm formats)
-		hasCtrlEnter := strings.Contains(line, "\x1b[13;5u") || strings.Contains(line, "\x1b[27;5;13~")
-		if hasCtrlEnter {
+		// Detect terminal escape sequences for Ctrl+Enter, Alt+Enter, Ctrl+S
+		hasSubmitSeq := strings.Contains(line, "\x1b[13;5u") ||
+			strings.Contains(line, "\x1b[27;5;13~") ||
+			strings.Contains(line, "\x1b[10;5u") ||
+			strings.Contains(line, "\x1b[27;5;10~") ||
+			strings.Contains(line, "\x1b[10~") ||
+			strings.Contains(line, "\x1b[13~") ||
+			strings.Contains(line, "\x1b\r") ||
+			strings.Contains(line, "\x1b\n") ||
+			strings.Contains(line, "\x1b[115;5u") ||
+			strings.Contains(line, "\x1b[83;5u") ||
+			strings.Contains(line, "\x1b[27;5;115~") ||
+			strings.Contains(line, "\x1b[27;5;83~") ||
+			strings.Contains(line, "\x13")
+		if hasSubmitSeq {
 			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
 			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
+			line = strings.ReplaceAll(line, "\x1b[10;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;10~", "")
+			line = strings.ReplaceAll(line, "\x1b[10~", "")
+			line = strings.ReplaceAll(line, "\x1b[13~", "")
+			line = strings.ReplaceAll(line, "\x1b\r", "")
+			line = strings.ReplaceAll(line, "\x1b\n", "")
+			line = strings.ReplaceAll(line, "\x1b[115;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[83;5u", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;115~", "")
+			line = strings.ReplaceAll(line, "\x1b[27;5;83~", "")
+			line = strings.ReplaceAll(line, "\x13", "")
 			if strings.TrimSpace(line) != "" {
 				lines = append(lines, line)
 			}
@@ -167,7 +190,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	}
 
 	// Enter Alternate Screen
-	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h")
+	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + "\x1b[?1000h\x1b[?1002h\x1b[?1006h" + ansiEnableKeyboard)
 	_ = os.Stdout.Sync()
 
 	contentH := h - 2
@@ -179,7 +202,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_, _ = os.Stdout.WriteString("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?2004l" + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
+			_, _ = os.Stdout.WriteString("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?2004l" + ansiDisableKeyboard + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
 			_ = os.Stdout.Sync()
 			_ = restoreTerm(inFd, state)
 		})

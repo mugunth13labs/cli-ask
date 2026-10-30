@@ -341,6 +341,32 @@ func TestMicroEditorOperations(t *testing.T) {
 		t.Errorf("expected submit on xterm Ctrl+Enter")
 	}
 
+	// 3a. Ctrl+S (byte 19) -> MUST submit
+	submit, cancel = processInput(ed, []byte{19})
+	if !submit || cancel {
+		t.Errorf("expected submit on byte 19 (Ctrl+S)")
+	}
+
+	// 3b. Alt+Enter (\x1b\r and \x1b\n) -> MUST submit
+	submit, cancel = processInput(ed, []byte("\x1b\r"))
+	if !submit || cancel {
+		t.Errorf("expected submit on Alt+Enter CR")
+	}
+	submit, cancel = processInput(ed, []byte("\x1b\n"))
+	if !submit || cancel {
+		t.Errorf("expected submit on Alt+Enter LF")
+	}
+
+	// 3c. Kitty / xterm Ctrl+S (\x1b[115;5u, \x1b[27;5;115~) -> MUST submit
+	submit, cancel = processInput(ed, []byte("\x1b[115;5u"))
+	if !submit || cancel {
+		t.Errorf("expected submit on Kitty Ctrl+S")
+	}
+	submit, cancel = processInput(ed, []byte("\x1b[27;5;115~"))
+	if !submit || cancel {
+		t.Errorf("expected submit on xterm Ctrl+S")
+	}
+
 	// 4. STRICT: Ctrl+D (byte 4) -> MUST NEVER submit!
 	submit, cancel = processInput(ed, []byte{4})
 	if submit || cancel {

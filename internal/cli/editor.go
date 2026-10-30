@@ -17,7 +17,9 @@ const (
 	ansiDisablePaste   = "\x1b[?2004l"
 	ansiHideCursor     = "\x1b[?25l"
 	ansiShowCursor     = "\x1b[?25h"
-	ansiClearScreen    = "\x1b[H\x1b[2J"
+	ansiClearScreen     = "\x1b[H\x1b[2J"
+	ansiEnableKeyboard  = "\x1b[>1u\x1b[>4;2m"
+	ansiDisableKeyboard = "\x1b[<u\x1b[>4;0m"
 )
 
 type MicroEditor struct {
@@ -396,13 +398,13 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 		return "", false, err
 	}
 
-	_, _ = os.Stdout.WriteString(ansiEnablePaste)
+	_, _ = os.Stdout.WriteString(ansiEnablePaste + ansiEnableKeyboard)
 	_ = os.Stdout.Sync()
 
 	var restoreOnce sync.Once
 	restore := func() {
 		restoreOnce.Do(func() {
-			_, _ = os.Stdout.WriteString(ansiDisablePaste)
+			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiDisableKeyboard)
 			_ = os.Stdout.Sync()
 			_ = restoreTerm(fd, state)
 		})
@@ -559,15 +561,15 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 // runComposer executes the micro-editor in the alternate screen buffer
 // Returns (prompt, isCancelled, error)
 func runComposer(title, subtitle string) (string, bool, error) {
-	// Enable alternate screen and bracketed paste
-	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + ansiEnablePaste)
+	// Enable alternate screen, bracketed paste, and enhanced keyboard
+	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + ansiEnablePaste + ansiEnableKeyboard)
 	_ = os.Stdout.Sync()
 
 	fd := os.Stdin.Fd()
 	state, err := makeRaw(fd)
 	if err != nil {
 		// Cleanup alternate screen on error
-		_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen)
+		_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiDisableKeyboard + ansiLeaveAltScreen)
 		_ = os.Stdout.Sync()
 		return "", false, err
 	}
@@ -575,7 +577,7 @@ func runComposer(title, subtitle string) (string, bool, error) {
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
+			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiDisableKeyboard + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
 			_ = os.Stdout.Sync()
 			_ = restoreTerm(fd, state)
 		})
@@ -655,9 +657,14 @@ func runInlineTurnEditor() (string, bool, error) {
 		return "", false, err
 	}
 
+	_, _ = os.Stdout.WriteString(ansiEnableKeyboard)
+	_ = os.Stdout.Sync()
+
 	var restoreOnce sync.Once
 	restore := func() {
 		restoreOnce.Do(func() {
+			_, _ = os.Stdout.WriteString(ansiDisableKeyboard)
+			_ = os.Stdout.Sync()
 			_ = restoreTerm(fd, state)
 		})
 	}
@@ -786,6 +793,11 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 			continue
 		}
 
+		// Ctrl+S (ASCII 19) -> Submit prompt
+		if b == 19 {
+			return true, false
+		}
+
 		// Backspace (ASCII 127 or ASCII 8)
 		if b == 127 || b == 8 {
 			editor.Backspace()
@@ -822,15 +834,21 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 			rem := data[i:]
 			remStr := string(rem)
 
-			// 1. Check for Ctrl+Enter sequences:
-			// \x1b[13;5u (CSI u), \x1b[27;5;13~ (xterm), \x1b[10;5u, \x1b[10~, \x1b[13~, \x1b\r, \x1b\n
+			// 1. Check for Ctrl+Enter, Alt+Enter, or Ctrl+S sequences:
+			// \x1b[13;5u (CSI u), \x1b[27;5;13~ (xterm), \x1b[10;5u, \x1b[27;5;10~, \x1b[10~, \x1b[13~, \x1b\r, \x1b\n,
+			// \x1b[115;5u / \x1b[83;5u (Kitty Ctrl+S), \x1b[27;5;115~ / \x1b[27;5;83~ (xterm Ctrl+S)
 			if strings.HasPrefix(remStr, "\x1b[13;5u") ||
 				strings.HasPrefix(remStr, "\x1b[27;5;13~") ||
 				strings.HasPrefix(remStr, "\x1b[10;5u") ||
+				strings.HasPrefix(remStr, "\x1b[27;5;10~") ||
 				strings.HasPrefix(remStr, "\x1b[10~") ||
 				strings.HasPrefix(remStr, "\x1b[13~") ||
 				strings.HasPrefix(remStr, "\x1b\r") ||
-				strings.HasPrefix(remStr, "\x1b\n") {
+				strings.HasPrefix(remStr, "\x1b\n") ||
+				strings.HasPrefix(remStr, "\x1b[115;5u") ||
+				strings.HasPrefix(remStr, "\x1b[83;5u") ||
+				strings.HasPrefix(remStr, "\x1b[27;5;115~") ||
+				strings.HasPrefix(remStr, "\x1b[27;5;83~") {
 				return true, false
 			}
 
