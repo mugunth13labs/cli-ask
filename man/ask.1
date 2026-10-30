@@ -1,6 +1,6 @@
-.TH ASK 1 "October 2026" "cli-ask 0.4.0" "User Commands"
+.TH ASK 1 "October 2026" "cli-ask 0.4.1" "User Commands"
 .SH NAME
-ask \- non-intrusive terminal AI assistant with session-scoped context, alternate screen composer, and code generation
+ask \- lean terminal AI assistant with session-scoped context, inline prompt composer, code generation, and interactive chat
 .SH SYNOPSIS
 .B ask
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
@@ -29,15 +29,15 @@ ask \- non-intrusive terminal AI assistant with session-scoped context, alternat
 [\fIOPTIONS\fR] [\fIPROMPT\fR]
 .SH DESCRIPTION
 .B ask
-is a lightweight, zero-dependency command-line utility designed for system administrators, DevOps engineers, and terminal users who want immediate, fluff-free AI answers without disrupting their shell workflow.
+is a lightweight, zero-dependency command-line utility built in pure Go, designed for system administrators, DevOps engineers, and terminal users who want immediate, fluff-free AI answers without disrupting their shell workflow.
 .PP
-Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in terminal-native plain text with ASCII underlines and clean indentation, avoiding unrendered web markdown.
+Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in clean, terminal-native plain text with ASCII underlines and readable indentation.
 .PP
-When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens a temporary composer in the Alternate Screen Buffer (similar to \fBman\fR or \fBless\fR). Inside the composer, you can freely paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without accidental execution. Upon pressing \fBCtrl+Enter\fR, the composer exits, restores your main terminal cleanly, and streams the AI response to stdout.
+When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens an inline multiline prompt composer directly within your active shell. Inside the composer, you can freely type or paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without premature execution. The composer features an automatic sliding viewport (clamped to 5 lines maximum) to ensure your terminal output remains visible. Upon pressing \fBCtrl+Enter\fR, the composer closes, records your prompt into the terminal scrollback history, and streams the AI response to stdout. Pressing \fBCtrl+C\fR cancels and exits cleanly.
 .PP
-When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an immersive continuous chat session in the Alternate Screen Buffer. It supports multi-turn memory, in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR), and cleanly restores your shell without polluting terminal history upon exiting. Words without a leading slash are treated strictly as literal prompt text.
+When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous chat session. It supports multi-turn memory, mouse drag text selection, visual clipboard copying, on-the-fly model validation (\fB/model <name>\fR), and in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR). Exiting via \fB/exit\fR or \fBCtrl+C\fR cleanly restores your terminal screen and disables mouse tracking. Words without a leading slash are treated strictly as literal prompt text.
 .PP
-When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.pbs\fR, etc.) or modifying scripts via pipes, \fBask\fR automatically activates pure code generation mode. In this mode, conversational fluff, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
+When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.go\fR, \fI.rs\fR, \fI.yaml\fR, \fI.json\fR, etc.) or piping scripts, \fBask\fR automatically activates pure code generation mode. In this mode, conversational filler, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
 
@@ -53,7 +53,7 @@ Write the AI response directly to \fIFILE\fR (overwrites existing contents). Aut
 Append the AI response directly to \fIFILE\fR (creates file if it does not exist).
 .TP
 .BR \-i ", " \-\-chatbot " [" \fIPROMPT\fR "]"
-Start an immersive continuous interactive chat session in the Alternate Screen Buffer. If an initial prompt is provided, it is submitted upon launch.
+Start an interactive continuous chat session with conversation memory, mouse text selection, model switching, and quick clipboard copy. If an initial prompt is provided, it is submitted upon launch.
 .TP
 .BR \-c ", " \-\-clear
 Clear the conversation history for the current terminal session.
@@ -62,7 +62,7 @@ Clear the conversation history for the current terminal session.
 Execute the query as a standalone request without loading or updating the session history.
 .TP
 .B \-\-update\-self ", " \-\-update
-Check for the latest release on GitHub and update the running binary in-place.
+Check for the latest release on GitHub and update the running binary in-place (and update the man page if installed).
 .TP
 .B \-\-
 POSIX end-of-options delimiter. All following arguments are treated strictly as literal prompt text, ignoring any dashes or flags.
@@ -82,20 +82,35 @@ Print program version and exit.
 .BR \-h ", " \-\-help
 Print usage help and exit.
 
-.SH CHATBOT COMMANDS
-Within interactive chatbot mode (\fBask -i\fR), the following commands are available at the \fB>>>\fR prompt:
+.SH CHATBOT COMMANDS & SHORTCUTS
+Within interactive chatbot mode (\fBask -i\fR), the following commands and shortcuts are available:
 .TP
 .BR /clear ", " /c
-Clear conversation memory for the current session.
+Clear conversation memory and reset session context.
 .TP
 .BR /model " [" \fIMODEL\fR "]"
-Switch the active model for the chat session, or display current model if no argument is given.
+Switch the active model for the chat session, or display current model if no argument is given. Entered model names are dynamically validated against OpenRouter models before switching; invalid names are rejected and the previous model is retained.
 .TP
 .B /help
 Display available chatbot commands.
 .TP
 .BR /exit ", " /quit ", " /q
-Exit chat mode and restore main terminal screen. Note: Words without a leading slash (e.g. \fBexit\fR, \fBquit\fR, \fBclear\fR) are treated as literal prompt text to allow discussing or debugging shell scripts without prematurely terminating the session.
+Exit chat mode and restore main terminal screen cleanly.
+.TP
+.B Ctrl+Enter
+Submit the multiline prompt to the AI.
+.TP
+.B Enter
+Insert a newline within the prompt composer.
+.TP
+.B Mouse Drag
+Highlight and select text within conversation history.
+.TP
+.BR y ", " Enter ", " Ctrl+Shift+C
+Copy currently highlighted selection in history to system clipboard.
+.TP
+.B Ctrl+C
+If streaming, cancels active stream; otherwise displays exit confirmation prompt.
 
 .SH ENVIRONMENT
 .TP
@@ -109,6 +124,9 @@ User configuration containing API credentials and preferred model.
 .TP
 .I ~/.config/ask/sessions/session\-<PPID>.json
 Session-scoped conversation history for the active terminal shell.
+.TP
+.I /usr/local/share/man/man1/ask.1
+System manual page (or \fI~/.local/share/man/man1/ask.1\fR for user installations).
 
 .SH EXAMPLES
 .TP
@@ -127,7 +145,7 @@ ask "filter only tcp ones"
 .B Standard input piping:
 git diff | ask "summarize these changes"
 .TP
-.B Interactive multiline composer:
+.B Inline multiline composer:
 ask
 .TP
 .B Continuous chatbot mode:
