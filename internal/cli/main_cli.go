@@ -232,7 +232,7 @@ func printHelp() {
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
-  ask                           Inline multiline composer (Ctrl+Enter to submit)
+  ask                           Inline multiline composer (Ctrl+S to submit)
   ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
   ask --chatbot, -i             Start immersive continuous interactive chat session
   echo "code" | ask "explain"   Pipe stdin to ask

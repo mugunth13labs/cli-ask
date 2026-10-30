@@ -332,15 +332,15 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 	cursorRowInWindow := visRow - scrollOffset
 
 	// Top border with scroll up indicator if scrolled down
-	header := "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ] "
+	header := "─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ] "
 	if scrollOffset > 0 {
 		if targetDesc != "" {
-			header = fmt.Sprintf("─ ask prompt [ Target: %s | ▲ %d above | Ctrl+Enter: Send | Ctrl+C: Cancel ] ", targetDesc, scrollOffset)
+			header = fmt.Sprintf("─ ask prompt [ Target: %s | ▲ %d above | Ctrl+S: Send | Ctrl+C: Cancel ] ", targetDesc, scrollOffset)
 		} else {
-			header = fmt.Sprintf("─ ask prompt [ ▲ %d above | Ctrl+Enter: Send | Ctrl+C: Cancel ] ", scrollOffset)
+			header = fmt.Sprintf("─ ask prompt [ ▲ %d above | Ctrl+S: Send | Ctrl+C: Cancel ] ", scrollOffset)
 		}
 	} else if targetDesc != "" {
-		header = fmt.Sprintf("─ ask prompt [ Target: %s | Ctrl+Enter: Send | Ctrl+C: Cancel ] ", targetDesc)
+		header = fmt.Sprintf("─ ask prompt [ Target: %s | Ctrl+S: Send | Ctrl+C: Cancel ] ", targetDesc)
 	}
 
 	headerRunes := utf8.RuneCountInString(header)

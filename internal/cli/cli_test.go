@@ -553,7 +553,7 @@ func TestFormatInlineComposerBox(t *testing.T) {
 	ed.Lines = []string{"how do I check open ports in linux?", "preferably with ss"}
 	top, lines, bottom, _, _, _ := formatInlineComposerBox(ed, 80, 5, 0, "")
 
-	if !strings.Contains(top, "─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ]") {
+	if !strings.Contains(top, "─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ]") {
 		t.Errorf("expected header in top border, got: %q", top)
 	}
 	if len(lines) != 2 {

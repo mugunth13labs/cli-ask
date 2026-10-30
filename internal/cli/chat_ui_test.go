@@ -284,7 +284,7 @@ func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Ctrl+Enter") || !strings.Contains(header, "/help /clear /model /exit") {
+	if !strings.Contains(header, "Ctrl+S") || !strings.Contains(header, "/help /clear /model /exit") {
 		t.Fatalf("expected header to contain slash command hints, got: %q", header)
 	}
 

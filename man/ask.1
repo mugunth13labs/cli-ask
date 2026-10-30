@@ -33,7 +33,7 @@ is a lightweight, zero-dependency command-line utility built in pure Go, designe
 .PP
 Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: it executes directly from standard command pipelines, streams concise answers directly to standard output, and exits immediately. AI responses are formatted in clean, terminal-native plain text with ASCII underlines and readable indentation.
 .PP
-When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens an inline multiline prompt composer directly within your active shell. Inside the composer, you can freely type or paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without premature execution. The composer features an automatic sliding viewport (clamped to 5 lines maximum) to ensure your terminal output remains visible. Upon pressing \fBCtrl+Enter\fR (or \fBCtrl+S\fR / \fBAlt+Enter\fR), the composer closes, records your prompt into the terminal scrollback history, and streams the AI response to stdout. Pressing \fBCtrl+C\fR cancels and exits cleanly.
+When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens an inline multiline prompt composer directly within your active shell. Inside the composer, you can freely type or paste multiline text, edit lines using cross-line Backspace and Arrow keys, and insert blank lines without premature execution. The composer features an automatic sliding viewport (clamped to 5 lines maximum) to ensure your terminal output remains visible. Upon pressing \fBCtrl+S\fR (or \fBCtrl+Enter\fR), the composer closes, records your prompt into the terminal scrollback history, and streams the AI response to stdout. Pressing \fBCtrl+C\fR cancels and exits cleanly.
 .PP
 When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous chat session. It supports multi-turn memory, mouse drag text selection, visual clipboard copying, on-the-fly model validation (\fB/model <name>\fR), and in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR). Exiting via \fB/exit\fR or \fBCtrl+C\fR cleanly restores your terminal screen and disables mouse tracking. Words without a leading slash are treated strictly as literal prompt text.
 .PP
@@ -97,8 +97,8 @@ Display available chatbot commands.
 .BR /exit ", " /quit ", " /q
 Exit chat mode and restore main terminal screen cleanly.
 .TP
-.BR Ctrl+Enter ", " Ctrl+S ", " Alt+Enter
-Submit the multiline prompt to the AI. (\fBCtrl+S\fR and \fBAlt+Enter\fR provide universal fallback submit shortcuts on terminal emulators that intercept or swallow \fBCtrl+Enter\fR).
+.BR Ctrl+S ", " Ctrl+Enter ", " Alt+Enter
+Submit the multiline prompt to the AI. \fBCtrl+S\fR is the standard universal submit shortcut; \fBCtrl+Enter\fR and \fBAlt+Enter\fR are also supported.
 .TP
 .B Enter
 Insert a newline within the prompt composer.

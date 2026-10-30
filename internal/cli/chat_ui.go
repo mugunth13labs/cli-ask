@@ -835,8 +835,7 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 			"  /help, /?          Show this help message\n" +
 			"  /exit, /quit, /q   Exit ask chat\n\n" +
 			"keyboard shortcuts:\n" +
-			"  Ctrl+Enter         Send prompt\n" +
-			"  Ctrl+S / Alt+Enter Alternative send shortcuts (for terminals intercepting Ctrl+Enter)\n" +
+			"  Ctrl+S             Send prompt (Ctrl+Enter / Alt+Enter also supported)\n" +
 			"  Enter              Insert newline in prompt\n" +
 			"  Up / Down          Navigate history & prompt\n" +
 			"  Shift+Arrows       Select text in history\n" +

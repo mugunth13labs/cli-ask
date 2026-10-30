@@ -80,13 +80,13 @@ Run `ask` by itself to write or paste multi-line prompts, code snippets, or erro
 $ ask
 ```
 ```text
-─ ask prompt [ Ctrl+Enter: Send | Ctrl+C: Cancel ] ─────────────────────────
+─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ] ─────────────────────────
   Write a Python script that monitors disk usage
   and alerts via webhook when / exceeds 90%.
 ────────────────────────────────────────────────────────────────────────────
 ```
 - Press `Enter` for a new line.
-- Press `Ctrl+Enter` (or `Ctrl+S` / `Alt+Enter`) to submit.
+- Press `Ctrl+S` (or `Ctrl+Enter`) to submit.
 - Press `Ctrl+C` to cancel.
 
 ### 3. Interactive Chat (`ask -i`)
@@ -97,7 +97,7 @@ $ ask -i
 - **Session Memory**: Remembers context across turns.
 - **Mouse Selection**: Click and drag to select text in chat history, then press `y`, `Enter`, or `Ctrl+Shift+C` to copy to clipboard.
 - **Keyboard Shortcuts**:
-  - `Ctrl+Enter` (or `Ctrl+S` / `Alt+Enter`) — Send prompt
+  - `Ctrl+S` (or `Ctrl+Enter`) — Send prompt
   - `Enter` — Insert newline in prompt
   - `Up` / `Down` — Navigate history & prompt
   - `Shift+Arrows` — Highlight text in history

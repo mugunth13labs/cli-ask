@@ -145,12 +145,12 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		hints = "↑/↓: Browse | Shift+Arrows: Select | ↑: Prompt "
 	} else {
 		// In Prompt composer
-		hints = "Ctrl+Enter: Send | /help /clear /model /exit | Ctrl+C: Exit "
+		hints = "Ctrl+S: Send | /help /clear /model /exit | Ctrl+C: Exit "
 		if width < 85 {
-			hints = "Ctrl+Enter: Send | / commands | Ctrl+C: Exit "
+			hints = "Ctrl+S: Send | / commands | Ctrl+C: Exit "
 		}
 		if width < 60 {
-			hints = "Ctrl+Enter: Send | Ctrl+C: Exit "
+			hints = "Ctrl+S: Send | Ctrl+C: Exit "
 		}
 	}
 
@@ -448,7 +448,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 	if opts.IsStdoutTerminal {
 		fmt.Printf("ask v%s — Continuous Chat Mode\n", version)
 		fmt.Printf("Model: %s | Session: %s\n", cfg.Model, sessionID)
-		fmt.Println("Send: Ctrl+Enter | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
+		fmt.Println("Send: Ctrl+S | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
 		fmt.Println()
 	}
 
