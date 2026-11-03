@@ -116,16 +116,22 @@ func readChatPrompt(reader *bufio.Reader, isInteractive bool) (string, error) {
 }
 
 func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *ChatUI) string {
+	navyBg := "\x1b[48;5;17m"
+	cyan := "\x1b[38;5;39m"
+	white := "\x1b[97m"
+	amber := "\x1b[38;5;214m"
+	reset := "\x1b[0m"
+
 	if confirmExit {
 		prompt := " Exit ask chat?  "
 		yes := " [ Yes ] "
 		no := " [ No ] "
 		if exitChoice == 0 {
-			yes = "\x1b[30;47;1m Yes \x1b[0m\x1b[7;1m"
+			yes = amber + "\x1b[7;1m Yes " + reset + navyBg + white
 			no = "  No  "
 		} else {
 			yes = "  Yes  "
-			no = "\x1b[30;47;1m No \x1b[0m\x1b[7;1m"
+			no = amber + "\x1b[7;1m No " + reset + navyBg + white
 		}
 		hints := " (←/→: Choose | Enter: Confirm | Esc: Cancel) "
 		text := prompt + yes + "  " + no + hints
@@ -133,7 +139,7 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		if rem < 0 {
 			rem = 0
 		}
-		return "\x1b[7;1m" + text + strings.Repeat(" ", rem) + "\x1b[0m"
+		return navyBg + white + text + strings.Repeat(" ", rem) + reset
 	}
 
 	title := " ask chat"
@@ -161,7 +167,7 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		rem = 0
 		hints = ""
 	}
-	return "\x1b[7;1m" + title + strings.Repeat(" ", rem) + hints + "\x1b[0m"
+	return navyBg + cyan + "\x1b[1m" + title + reset + navyBg + strings.Repeat(" ", rem) + white + hints + reset
 }
 
 func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) error {
@@ -237,7 +243,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 
 		// 2. Row 2: Divider line
 		sb.WriteString("\x1b[2;1H\x1b[K")
-		sb.WriteString("\x1b[90m" + strings.Repeat("─", curW) + "\x1b[0m")
+		sb.WriteString("\x1b[38;5;39m" + strings.Repeat("─", curW) + "\x1b[0m")
 
 		// 3. Rows 3..curH: ChatUI rows
 		for r := 0; r < contentH; r++ {

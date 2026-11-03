@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	version = "0.4.2"
+	version = "0.5.0"
 )
 
 var codeFileExts = map[string]bool{
@@ -445,6 +445,24 @@ func Run(cmdArgs []string) {
 		activeSystemPrompt = codePrompt
 	}
 
+	// Check for @filename references and resolve attachments
+	refs := ExtractFileReferences(userPrompt)
+	var attachments []FileAttachment
+	apiUserPrompt := userPrompt
+	if len(refs) > 0 {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		atts, fileContext, err := ResolveFileContext(cwd, refs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		attachments = atts
+		apiUserPrompt = userPrompt + fileContext
+	}
+
 	var apiMessages []Message
 	apiMessages = append(apiMessages, Message{Role: "system", Content: activeSystemPrompt})
 
@@ -453,7 +471,7 @@ func Run(cmdArgs []string) {
 		apiMessages = append(apiMessages, compacted...)
 	}
 
-	apiMessages = append(apiMessages, Message{Role: "user", Content: userPrompt})
+	apiMessages = append(apiMessages, Message{Role: "user", Content: apiUserPrompt})
 
 	ctx := context.Background()
 	response, queryErr := queryOpenRouter(ctx, cfg, apiMessages, queryOpts)
@@ -463,8 +481,9 @@ func Run(cmdArgs []string) {
 	}
 
 	if parsed.UseContext && currentSession != nil && response != "" {
+		historyPrompt := FormatHistoryPrompt(userPrompt, attachments)
 		currentSession.Messages = append(currentSession.Messages,
-			Message{Role: "user", Content: userPrompt},
+			Message{Role: "user", Content: historyPrompt},
 			Message{Role: "assistant", Content: response},
 		)
 		_ = saveSession(currentSession)

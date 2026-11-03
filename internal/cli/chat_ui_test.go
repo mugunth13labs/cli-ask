@@ -273,8 +273,8 @@ func TestPromptBoxSubtleTint(t *testing.T) {
 	chat := NewChatUI(cfg, nil, QueryOptions{}, "tint test", 40, 10)
 
 	row0 := chat.RenderRow(0)
-	if !strings.Contains(row0, "\x1b[48;5;236m") {
-		t.Fatalf("expected prompt box row 0 to contain background tint \\x1b[48;5;236m, got: %q", row0)
+	if !strings.Contains(row0, "\x1b[48;5;17m") {
+		t.Fatalf("expected prompt box row 0 to contain midnight navy background tint \\x1b[48;5;17m, got: %q", row0)
 	}
 }
 
@@ -532,5 +532,42 @@ func TestChatUIAlternativeSubmitAndIgnoreRules(t *testing.T) {
 	}
 	if chat.PromptLines[0] != "prompt before ctrl+d" {
 		t.Fatalf("STRICT RULE BROKEN: Ctrl+Z must not modify prompt, got: %q", chat.PromptLines[0])
+	}
+}
+
+func TestChatUIAutocompleteFlow(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
+	chat.Auto.AllFiles = []string{"cmd/ask/main.go", "internal/cli/editor.go", "internal/cli/files.go", "README.md"}
+
+	// 1. Typing '@' triggers autocomplete
+	chat.HandleKey([]byte("@"))
+	if !chat.Auto.Active {
+		t.Fatalf("expected autocomplete to be active after '@'")
+	}
+
+	// 2. Typing 'fil' filters candidates
+	chat.HandleKey([]byte("f"))
+	chat.HandleKey([]byte("i"))
+	chat.HandleKey([]byte("l"))
+	if len(chat.Auto.Candidates) != 1 || chat.Auto.Candidates[0] != "internal/cli/files.go" {
+		t.Fatalf("expected candidates to match 'internal/cli/files.go', got: %v", chat.Auto.Candidates)
+	}
+
+	// 3. Tab selects candidate and appends trailing space
+	chat.HandleKey([]byte{9}) // Tab
+	if chat.Auto.Active {
+		t.Fatalf("expected autocomplete to be dismissed after Tab")
+	}
+	expected := "@internal/cli/files.go "
+	if chat.PromptLines[0] != expected {
+		t.Fatalf("expected prompt to be %q, got %q", expected, chat.PromptLines[0])
+	}
+
+	// 4. Pasting text with '@' does NOT trigger autocomplete
+	pasteWithAt := []byte("check @README.md here")
+	chat.HandleKey(pasteWithAt)
+	if chat.Auto.Active {
+		t.Fatalf("pasted multi-character string must NOT trigger autocomplete")
 	}
 }

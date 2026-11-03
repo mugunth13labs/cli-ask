@@ -26,7 +26,9 @@ $ ask -i
 
 - **Lightning Fast**: Single static binary written in pure Go. Starts in under 10ms with zero runtime dependencies.
 - **Inline Multi-Line Composer**: Run `ask` with no arguments to type or paste multi-line prompts and scripts directly in your shell.
+- **File References (`@filename`)**: Attach local files effortlessly. Typing `@` opens an interactive recursive search dropdown with `Up`/`Down` navigation and `Tab` completion. Missing files are detected instantly.
 - **Interactive Chat (`ask -i`)**: Continuous back-and-forth dialogue with session memory, mouse text selection, and on-the-fly model switching.
+- **High-Contrast Design**: Crisp Deep Midnight Navy message boxes with bright white text, electric cyan borders, and amber tags for all terminal themes.
 - **Pure Code Generation (`--cg`, `-o`, `-a`)**: Generates raw, executable code without markdown code fences or conversational filler—ready to run or pipe.
 - **Shell-Scoped Context**: Remembers conversation history within your active terminal tab without leaking across unrelated windows or tmux panes.
 - **Unix Piping**: Seamlessly inspect piped output from `git`, `docker`, `journalctl`, `curl`, and other standard tools.
@@ -89,7 +91,24 @@ $ ask
 - Press `Ctrl+S` (or `Ctrl+Enter`) to submit.
 - Press `Ctrl+C` to cancel.
 
-### 3. Interactive Chat (`ask -i`)
+### 3. File References & Live Autocomplete (`@filename`)
+Seamlessly include code or config files in your prompts across one-shot queries, the composer, and interactive chat:
+```bash
+# Attach files in one-shot prompts
+ask "explain the architecture in @main.go and @internal/cli/editor.go"
+
+# Check code for bugs
+ask --cg "refactor @src/utils.py to use async/await"
+```
+- **Live Search Dropdown**: In `ask` (empty composer) or `ask -i` (chat), typing `@` opens a live file search popup that recursively scans your workspace:
+  - `Up` / `Down` arrows to navigate files.
+  - `Tab` or `Enter` to autocomplete `@path/to/file `.
+  - `Esc` to dismiss.
+- **Missing File Protection**: If any referenced file does not exist, `ask` halts before making an API call and reports the missing file with exit code 1.
+- **Smart 1MB Safety**: Files up to 1MB are transmitted in full. Files exceeding 1MB (up to 10MB) are truncated with a clear notice; files >10MB are rejected.
+- **Lightweight History**: Only the clean prompt with `@filename` (or `@filename [truncated]`) is recorded in conversation history—never megabytes of repeated file dumps.
+
+### 4. Interactive Chat (`ask -i`)
 Launch continuous chat mode for deep technical discussions or iterative problem-solving:
 ```bash
 $ ask -i
@@ -108,7 +127,7 @@ $ ask -i
   - `/help` — View commands
   - `/exit` or `Ctrl+C` — Exit back to shell
 
-### 4. Code Generation
+### 5. Code Generation
 Generate raw, executable scripts or configurations:
 ```bash
 # Generate pure code to stdout
@@ -122,7 +141,7 @@ ask -a docker-compose.yml "add redis with persistent storage"
 ```
 *(Code generation mode activates automatically when outputting to code file extensions).*
 
-### 5. Pipes & Logs
+### 6. Pipes & Logs
 Feed command outputs directly into `ask`:
 ```bash
 # Debug system logs
@@ -135,7 +154,7 @@ git diff HEAD~1 | ask "identify any security risks in this diff"
 ss -tulpn | ask "which ports are exposed to the public internet?"
 ```
 
-### 6. Changing Models
+### 7. Changing Models
 Check your settings or switch default models anytime:
 ```bash
 # View current configuration
@@ -147,7 +166,7 @@ ask --set-model deepseek/deepseek-r1:free
 ask --set-model anthropic/claude-3.5-sonnet
 ```
 
-### 7. Session Management
+### 8. Session Management
 ```bash
 # Clear session memory for current terminal tab
 ask --clear

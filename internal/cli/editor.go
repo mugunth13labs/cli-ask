@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -352,7 +353,7 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 	if headerRunes < boxWidth {
 		dashes = strings.Repeat("─", boxWidth-headerRunes)
 	}
-	topBorder := fmt.Sprintf("\x1b[90m%s%s\x1b[0m", header, dashes)
+	topBorder := fmt.Sprintf("\x1b[38;5;39m%s%s\x1b[0m", header, dashes)
 
 	contentLines := make([]string, 0, len(windowLines))
 	for _, vl := range windowLines {
@@ -362,7 +363,7 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 		if padLen > 0 {
 			pad = strings.Repeat(" ", padLen)
 		}
-		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;236m  %s%s  \x1b[0m", vl.text, pad))
+		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;17m\x1b[97m  %s%s  \x1b[0m", vl.text, pad))
 	}
 
 	// Bottom border with scroll down indicator if lines remain below
@@ -379,9 +380,9 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 		if bRunes < boxWidth {
 			bDashes = strings.Repeat("─", boxWidth-bRunes)
 		}
-		bottomBorder = fmt.Sprintf("\x1b[90m%s%s\x1b[0m", bottomText, bDashes)
+		bottomBorder = fmt.Sprintf("\x1b[38;5;39m%s%s\x1b[0m", bottomText, bDashes)
 	} else {
-		bottomBorder = fmt.Sprintf("\x1b[90m%s\x1b[0m", strings.Repeat("─", boxWidth))
+		bottomBorder = fmt.Sprintf("\x1b[38;5;39m%s\x1b[0m", strings.Repeat("─", boxWidth))
 	}
 
 	return topBorder, contentLines, bottomBorder, cursorRowInWindow, visCol, scrollOffset
@@ -412,6 +413,7 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 	defer restore()
 
 	editor := NewMicroEditor("", "")
+	auto := NewAutocomplete()
 	prevCursorRowInWindow := 0
 	scrollOffset := 0
 	prevRendered := false
@@ -476,13 +478,18 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 		var cursorRowInWindow, visCol int
 		top, lines, bottom, cursorRowInWindow, visCol, scrollOffset = formatInlineComposerBox(editor, boxWidth, maxVisibleLines, scrollOffset, targetDesc)
 
+		dropdownLines := FormatDropdownLines(auto, boxWidth)
+
 		b.WriteString(top + "\r\n")
 		for _, l := range lines {
 			b.WriteString(l + "\r\n")
 		}
 		b.WriteString(bottom + "\r\n")
+		for _, dl := range dropdownLines {
+			b.WriteString(dl + "\r\n")
+		}
 
-		linesUp := len(lines) + 1 - cursorRowInWindow
+		linesUp := len(dropdownLines) + len(lines) + 1 - cursorRowInWindow
 		targetCol := 3 + visCol
 		if targetCol > boxWidth {
 			targetCol = boxWidth
@@ -518,6 +525,7 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 
 		// Handle bracketed paste blocks: \x1b[2004~ ... \x1b[2004~
 		if strings.Contains(input, "\x1b[2004~") {
+			auto.Dismiss()
 			parts := strings.Split(input, "\x1b[2004~")
 			for i, part := range parts {
 				if i%2 == 1 {
@@ -527,6 +535,89 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 					processInput(editor, []byte(part))
 				}
 			}
+			renderBox()
+			continue
+		}
+
+		// Handle Autocomplete interactions when active
+		if auto.Active {
+			// Up arrow
+			if bytes.Equal(buf[:n], []byte("\x1b[A")) || bytes.Equal(buf[:n], []byte("\x1bOA")) {
+				auto.Prev()
+				renderBox()
+				continue
+			}
+			// Down arrow
+			if bytes.Equal(buf[:n], []byte("\x1b[B")) || bytes.Equal(buf[:n], []byte("\x1bOB")) {
+				auto.Next()
+				renderBox()
+				continue
+			}
+			// Tab (ASCII 9) or Enter (ASCII 13 / 10) selects candidate
+			if buf[0] == 9 || buf[0] == 13 || (n == 1 && buf[0] == 10) {
+				cand := auto.SelectedCandidate()
+				if cand != "" && auto.TriggerRow < len(editor.Lines) {
+					line := editor.Lines[editor.CursorRow]
+					lineRunes := []rune(line)
+					prefix := string(lineRunes[:auto.TriggerCol])
+					suffix := ""
+					if editor.CursorCol < len(lineRunes) {
+						suffix = string(lineRunes[editor.CursorCol:])
+					}
+					inserted := "@" + cand + " "
+					editor.Lines[editor.CursorRow] = prefix + inserted + suffix
+					editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
+				}
+				auto.Dismiss()
+				renderBox()
+				continue
+			}
+			// Esc closes autocomplete
+			if n == 1 && buf[0] == 27 {
+				auto.Dismiss()
+				renderBox()
+				continue
+			}
+			// Backspace
+			if buf[0] == 127 || buf[0] == 8 {
+				editor.Backspace()
+				if editor.CursorRow != auto.TriggerRow || editor.CursorCol <= auto.TriggerCol {
+					auto.Dismiss()
+				} else {
+					line := editor.Lines[editor.CursorRow]
+					lineRunes := []rune(line)
+					if editor.CursorCol > auto.TriggerCol {
+						auto.UpdateQuery(string(lineRunes[auto.TriggerCol+1 : editor.CursorCol]))
+					} else {
+						auto.UpdateQuery("")
+					}
+				}
+				renderBox()
+				continue
+			}
+			// Regular characters
+			if n == 1 && buf[0] >= 32 {
+				r := rune(buf[0])
+				if IsPathDelimiter(r) {
+					auto.Dismiss()
+					editor.InsertChar(r)
+				} else {
+					editor.InsertChar(r)
+					line := editor.Lines[editor.CursorRow]
+					lineRunes := []rune(line)
+					if editor.CursorCol > auto.TriggerCol {
+						auto.UpdateQuery(string(lineRunes[auto.TriggerCol+1 : editor.CursorCol]))
+					}
+				}
+				renderBox()
+				continue
+			}
+		}
+
+		// When autocomplete is NOT active, typing single '@' invokes it
+		if !auto.Active && n == 1 && buf[0] == '@' {
+			editor.InsertChar('@')
+			auto.Trigger(editor.CursorRow, editor.CursorCol-1)
 			renderBox()
 			continue
 		}

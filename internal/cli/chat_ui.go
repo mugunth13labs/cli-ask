@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,9 @@ type ChatUI struct {
 
 	ActiveRegion ChatRegion
 
+	// Autocomplete state
+	Auto *AutocompleteState
+
 	// Selection state
 	Selecting bool
 	SelStartR int
@@ -84,6 +88,7 @@ func NewChatUI(cfg *Config, session *Session, opts QueryOptions, initialPrompt s
 		PromptRow:    0,
 		PromptCol:    0,
 		ActiveRegion: RegionPrompt,
+		Auto:         NewAutocomplete(),
 		Turns:        []ChatTurn{},
 	}
 
@@ -385,7 +390,7 @@ func (ui *ChatUI) RenderRow(r int) string {
 		} else {
 			text = text + strings.Repeat(" ", ui.Width-len(runes))
 		}
-		return "\x1b[48;5;236m" + text + "\x1b[0m"
+		return "\x1b[48;5;17m\x1b[97m" + text + "\x1b[0m"
 	}
 
 	// 2. Divider Row between Prompt Box and Reversed History
@@ -406,7 +411,16 @@ func (ui *ChatUI) RenderRow(r int) string {
 				rem = 0
 			}
 		}
-		return "\x1b[90m" + title + strings.Repeat("─", rem) + "\x1b[0m"
+		return "\x1b[38;5;39m" + title + strings.Repeat("─", rem) + "\x1b[0m"
+	}
+
+	// 2b. Autocomplete overlay directly below divider row
+	if ui.Auto != nil && ui.Auto.Active {
+		dl := FormatDropdownLines(ui.Auto, ui.Width)
+		dropIdx := r - (dividerRow + 1)
+		if dropIdx >= 0 && dropIdx < len(dl) {
+			return dl[dropIdx]
+		}
 	}
 
 	// 3. Reversed History Rows (r > dividerRow)
@@ -426,14 +440,14 @@ func (ui *ChatUI) RenderRow(r int) string {
 			var sb strings.Builder
 			switch line.BannerKind {
 			case "LEAN_LINE":
-				// Lean horizontal rule in dimmed gray (\x1b[90m)
-				sb.WriteString("\x1b[90m")
+				// Lean horizontal rule in Electric cyan (\x1b[38;5;39m)
+				sb.WriteString("\x1b[38;5;39m")
 				sb.WriteString(string(rawRunes))
 				sb.WriteString(strings.Repeat("─", rem))
 				sb.WriteString("\x1b[0m")
 			case "USER_LINE":
-				// Normal line with YOU START / YOU END in the middle
-				sb.WriteString("\x1b[90m")
+				// User line in warm amber (\x1b[38;5;214m)
+				sb.WriteString("\x1b[38;5;214m")
 				sb.WriteString(string(rawRunes))
 				sb.WriteString(strings.Repeat("─", rem))
 				sb.WriteString("\x1b[0m")
@@ -886,6 +900,9 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		return false
 	}
 	if fullPrompt == "/clear" || fullPrompt == "/c" {
+		if ui.Auto != nil {
+			ui.Auto.Dismiss()
+		}
 		ui.Turns = []ChatTurn{}
 		ui.PromptLines = []string{""}
 		ui.PromptRow = 0
@@ -897,14 +914,47 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		}
 		return false
 	}
+
+	if ui.Auto != nil {
+		ui.Auto.Dismiss()
+	}
+
+	// Check for @filename references and resolve attachments
+	refs := ExtractFileReferences(fullPrompt)
+	var attachments []FileAttachment
+	queryPayload := fullPrompt
+	if len(refs) > 0 {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		atts, fileContext, err := ResolveFileContext(cwd, refs)
+		if err != nil {
+			nowTs := time.Now().Format("15:04:05")
+			ui.Turns = append(ui.Turns,
+				ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
+				ChatTurn{Role: "assistant", Content: err.Error(), Timestamp: nowTs},
+			)
+			ui.PromptLines = []string{""}
+			ui.PromptRow = 0
+			ui.PromptCol = 0
+			ui.PromptScroll = 0
+			ui.rebuildReversedLines()
+			return false
+		}
+		attachments = atts
+		queryPayload = fullPrompt + fileContext
+	}
+
+	historyPrompt := FormatHistoryPrompt(fullPrompt, attachments)
 	nowTs := time.Now().Format("15:04:05")
-	ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs})
+	ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: historyPrompt, Timestamp: nowTs})
 	ui.PromptLines = []string{""}
 	ui.PromptRow = 0
 	ui.PromptCol = 0
 	ui.PromptScroll = 0
 	ui.rebuildReversedLines()
-	go ui.executeChatQuery(fullPrompt)
+	go ui.executeChatQuery(historyPrompt, queryPayload)
 	return false
 }
 
@@ -929,10 +979,18 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 
 			// 1a. Arrow Keys: Up, Down, Left, Right (both standard CSI and SS3/DECCKM)
 			if bytes.Equal(seq, []byte("\x1b[A")) || bytes.Equal(seq, []byte("\x1bOA")) {
+				if ui.Auto != nil && ui.Auto.Active {
+					ui.Auto.Prev()
+					continue
+				}
 				ui.handleUpArrow()
 				continue
 			}
 			if bytes.Equal(seq, []byte("\x1b[B")) || bytes.Equal(seq, []byte("\x1bOB")) {
+				if ui.Auto != nil && ui.Auto.Active {
+					ui.Auto.Next()
+					continue
+				}
 				ui.handleDownArrow()
 				continue
 			}
@@ -1021,6 +1079,18 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				continue
 			}
 
+			// 1f. Esc sequence handling
+			if bytes.Equal(seq, []byte("\x1b")) || (len(seq) == 1 && seq[0] == 27) {
+				if ui.Auto != nil && ui.Auto.Active {
+					ui.Auto.Dismiss()
+					continue
+				}
+				if ui.Selecting {
+					ui.Selecting = false
+					continue
+				}
+			}
+
 			// Unrecognized escape sequences: safely consumed and discarded (never inserted as text!)
 			continue
 		}
@@ -1082,6 +1152,32 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		}
 
 		// In Prompt Region:
+		// Tab (9) for Autocomplete selection or indentation
+		if b == 9 {
+			offset++
+			if ui.Auto != nil && ui.Auto.Active {
+				cand := ui.Auto.SelectedCandidate()
+				if cand != "" && ui.PromptRow < len(ui.PromptLines) {
+					line := ui.PromptLines[ui.PromptRow]
+					lineRunes := []rune(line)
+					prefix := string(lineRunes[:ui.Auto.TriggerCol])
+					suffix := ""
+					if ui.PromptCol < len(lineRunes) {
+						suffix = string(lineRunes[ui.PromptCol:])
+					}
+					inserted := "@" + cand + " "
+					ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+					ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+					ui.adjustPromptScroll()
+				}
+				ui.Auto.Dismiss()
+				continue
+			}
+			ui.insertText("  ")
+			ui.adjustPromptScroll()
+			continue
+		}
+
 		// Standalone Ctrl+J / LF: Ctrl+Enter
 		if b == 10 && len(inBuf) == 1 {
 			offset++
@@ -1096,6 +1192,24 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			offset++
 			if b == 13 && offset < len(inBuf) && inBuf[offset] == 10 {
 				offset++
+			}
+			if ui.Auto != nil && ui.Auto.Active {
+				cand := ui.Auto.SelectedCandidate()
+				if cand != "" && ui.PromptRow < len(ui.PromptLines) {
+					line := ui.PromptLines[ui.PromptRow]
+					lineRunes := []rune(line)
+					prefix := string(lineRunes[:ui.Auto.TriggerCol])
+					suffix := ""
+					if ui.PromptCol < len(lineRunes) {
+						suffix = string(lineRunes[ui.PromptCol:])
+					}
+					inserted := "@" + cand + " "
+					ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+					ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+					ui.adjustPromptScroll()
+				}
+				ui.Auto.Dismiss()
+				continue
 			}
 			ui.insertNewline()
 			ui.adjustPromptScroll()
@@ -1119,19 +1233,49 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				ui.PromptLines = append(ui.PromptLines[:ui.PromptRow], ui.PromptLines[ui.PromptRow+1:]...)
 				ui.PromptRow--
 			}
+			if ui.Auto != nil && ui.Auto.Active {
+				if ui.PromptRow != ui.Auto.TriggerRow || ui.PromptCol <= ui.Auto.TriggerCol {
+					ui.Auto.Dismiss()
+				} else {
+					lineRunes := []rune(ui.PromptLines[ui.PromptRow])
+					if ui.PromptCol > ui.Auto.TriggerCol {
+						ui.Auto.UpdateQuery(string(lineRunes[ui.Auto.TriggerCol+1 : ui.PromptCol]))
+					} else {
+						ui.Auto.UpdateQuery("")
+					}
+				}
+			}
 			ui.adjustPromptScroll()
 			continue
 		}
 
 		// Collect contiguous text bytes up to next control/escape char
 		end := offset
-		for end < len(inBuf) && inBuf[end] != 0x1b && inBuf[end] != 3 && inBuf[end] != 4 && inBuf[end] != 19 && inBuf[end] != 26 && inBuf[end] != 24 && inBuf[end] != 10 && inBuf[end] != 13 && inBuf[end] != 127 && inBuf[end] != 8 {
+		for end < len(inBuf) && inBuf[end] != 0x1b && inBuf[end] != 3 && inBuf[end] != 4 && inBuf[end] != 19 && inBuf[end] != 26 && inBuf[end] != 24 && inBuf[end] != 10 && inBuf[end] != 13 && inBuf[end] != 127 && inBuf[end] != 8 && inBuf[end] != 9 {
 			end++
 		}
 		textBytes := inBuf[offset:end]
 		offset = end
 		if len(textBytes) > 0 {
+			// Trigger autocomplete when user directly types single '@'
+			if len(textBytes) == 1 && textBytes[0] == '@' && (ui.Auto == nil || !ui.Auto.Active) {
+				ui.insertText("@")
+				if ui.Auto != nil {
+					ui.Auto.Trigger(ui.PromptRow, ui.PromptCol-1)
+				}
+				ui.adjustPromptScroll()
+				continue
+			}
+
 			ui.insertText(string(textBytes))
+			if ui.Auto != nil && ui.Auto.Active {
+				if len(textBytes) == 1 && IsPathDelimiter(rune(textBytes[0])) {
+					ui.Auto.Dismiss()
+				} else if ui.PromptRow == ui.Auto.TriggerRow && ui.PromptCol > ui.Auto.TriggerCol {
+					lineRunes := []rune(ui.PromptLines[ui.PromptRow])
+					ui.Auto.UpdateQuery(string(lineRunes[ui.Auto.TriggerCol+1 : ui.PromptCol]))
+				}
+			}
 			ui.adjustPromptScroll()
 		}
 	}
@@ -1152,7 +1296,7 @@ func (ui *ChatUI) clampPromptCol() {
 	}
 }
 
-func (ui *ChatUI) executeChatQuery(prompt string) {
+func (ui *ChatUI) executeChatQuery(historyPrompt, queryPayload string) {
 	ui.mu.Lock()
 	ui.IsStreaming = true
 	ui.StreamContent.Reset()
@@ -1168,7 +1312,7 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 		compacted := compactHistory(ui.Session.Messages)
 		apiMessages = append(apiMessages, compacted...)
 	}
-	apiMessages = append(apiMessages, Message{Role: "user", Content: prompt})
+	apiMessages = append(apiMessages, Message{Role: "user", Content: queryPayload})
 
 	queryCtx, cancel := context.WithCancel(context.Background())
 	ui.ActiveCancel = cancel
@@ -1209,7 +1353,7 @@ func (ui *ChatUI) executeChatQuery(prompt string) {
 	if response != "" {
 		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: response, Timestamp: nowTs})
 		ui.Session.Messages = append(ui.Session.Messages,
-			Message{Role: "user", Content: prompt},
+			Message{Role: "user", Content: historyPrompt},
 			Message{Role: "assistant", Content: response},
 		)
 		_ = saveSession(ui.Session)

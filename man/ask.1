@@ -1,4 +1,4 @@
-.TH ASK 1 "October 2026" "cli-ask 0.4.2" "User Commands"
+.TH ASK 1 "November 2026" "cli-ask 0.5.0" "User Commands"
 .SH NAME
 ask \- lean terminal AI assistant with session-scoped context, inline prompt composer, code generation, and interactive chat
 .SH SYNOPSIS
@@ -38,6 +38,8 @@ When invoked with no prompt arguments in an interactive terminal, \fBask\fR open
 When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous chat session. It supports multi-turn memory, mouse drag text selection, visual clipboard copying, on-the-fly model validation (\fB/model <name>\fR), and in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR). Exiting via \fB/exit\fR or \fBCtrl+C\fR cleanly restores your terminal screen and disables mouse tracking. Words without a leading slash are treated strictly as literal prompt text.
 .PP
 When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.go\fR, \fI.rs\fR, \fI.yaml\fR, \fI.json\fR, etc.) or piping scripts, \fBask\fR automatically activates pure code generation mode. In this mode, conversational filler, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
+.PP
+You can reference local files across any workflow using \fB@filename\fR syntax (e.g. \fIask "explain @main.go"\fR). When referenced, \fBask\fR verifies the file exists relative to the current working directory, checks that it is not a binary file, and attaches its contents in structured markdown fences up to 1MB. Files exceeding 1MB (up to 10MB) are cleanly truncated with a notice, and files exceeding 10MB are rejected. If any referenced file is missing, the query is dropped immediately with an exit code 1 error. Inside both the inline composer and interactive chat mode, typing \fB@\fR opens a live file search dropdown that recursively scans the working directory, navigable via Up/Down arrows and completable with Tab or Enter. Session history preserves only the \fB@filename\fR tag (or \fB@filename [truncated]\fR), preventing bloated multi-megabyte session files on disk.
 .PP
 Conversational context is automatically preserved and scoped to the parent shell process ID (PPID). Follow-up questions in the same terminal window retain knowledge of prior turns without cross-contaminating other shell tabs or tmux panes. Long conversations are automatically compacted to maintain responsiveness and avoid token window exhaustion.
 

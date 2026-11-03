@@ -560,7 +560,7 @@ func TestFormatInlineComposerBox(t *testing.T) {
 		t.Fatalf("expected 2 content lines, got %d", len(lines))
 	}
 	for _, l := range lines {
-		if !strings.Contains(l, "\x1b[48;5;236m  ") {
+		if !strings.Contains(l, "\x1b[48;5;17m\x1b[97m  ") {
 			t.Errorf("expected subtle tint and 2 spaces margin in content line, got: %q", l)
 		}
 	}
