@@ -27,7 +27,7 @@ func RunUninstallSelf() error {
 	fmt.Println("The following changes will be made to your system:")
 	fmt.Printf("  • Remove binary:          %s\n", execPath)
 	if profilePath != "" {
-		fmt.Printf("  • Clean shell profile:    %s\n", profilePath)
+		fmt.Printf("  • Remove hook from profile: %s (preserves all your other settings)\n", profilePath)
 	}
 	home, _ := os.UserHomeDir()
 	scriptsDir := filepath.Join(home, ".config", "ask", "scripts")
