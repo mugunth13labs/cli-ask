@@ -87,6 +87,16 @@ func TestParseCLIArgsGhost(t *testing.T) {
 	if p5.Action != "uninstall-shell-ghost" {
 		t.Errorf("expected action 'uninstall-shell-ghost', got %q", p5.Action)
 	}
+
+	p6 := parseCLIArgs([]string{"--uninstall-self"})
+	if p6.Action != "uninstall-self" {
+		t.Errorf("expected action 'uninstall-self', got %q", p6.Action)
+	}
+
+	p7 := parseCLIArgs([]string{"--uninstall"})
+	if p7.Action != "uninstall-self" {
+		t.Errorf("expected action 'uninstall-self', got %q", p7.Action)
+	}
 }
 
 func TestDetectActiveShell(t *testing.T) {

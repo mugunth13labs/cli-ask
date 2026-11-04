@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	version = "0.6.0"
+	version = "0.6.1"
 )
 
 var codeFileExts = map[string]bool{
@@ -72,6 +72,9 @@ func parseCLIArgs(args []string) ParsedArgs {
 			return result
 		case "--uninstall-shell-ghost":
 			result.Action = "uninstall-shell-ghost"
+			return result
+		case "--uninstall-self", "--uninstall":
+			result.Action = "uninstall-self"
 			return result
 		}
 	}
@@ -287,6 +290,7 @@ Configuration:
   ask --set-model <model>       Set default model (default: %s)
   ask --config                  Show current configuration file and settings
   ask --update-self, --update   Check for updates and update in-place
+  ask --uninstall-self          Completely uninstall ask from the system
   ask --version, -v             Show version
   ask --help, -h                Show this help message
 
@@ -400,6 +404,12 @@ func Run(cmdArgs []string) {
 		return
 	case "uninstall-shell-ghost":
 		if err := UninstallShellGhost(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "uninstall-self":
+		if err := RunUninstallSelf(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
