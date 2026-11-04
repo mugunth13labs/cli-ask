@@ -154,7 +154,18 @@ git diff HEAD~1 | ask "identify any security risks in this diff"
 ss -tulpn | ask "which ports are exposed to the public internet?"
 ```
 
-### 7. Changing Models
+### 7. AI Shell Autocompletion (`Alt+RightArrow`)
+Complete commands in-place right at your terminal prompt:
+```bash
+# Enable shell completion hook
+ask --toggle-ghost
+```
+- Type any partial command or prompt (e.g. `get-proc` or `# find large files`).
+- Press **`Alt+RightArrow`** to instantly complete the line with the AI recommendation.
+- Press **`Enter`** once to execute.
+- Supported shells: PowerShell, Bash, Zsh, Fish.
+
+### 8. Changing Models
 Check your settings or switch default models anytime:
 ```bash
 # View current configuration
