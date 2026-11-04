@@ -82,13 +82,14 @@ Run `ask` by itself to write or paste multi-line prompts, code snippets, or erro
 $ ask
 ```
 ```text
-─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ] ─────────────────────────
+─ ask prompt [ Alt+→: Send | Ctrl+C: Cancel ] ─────────────────────────
   Write a Python script that monitors disk usage
   and alerts via webhook when / exceeds 90%.
 ────────────────────────────────────────────────────────────────────────────
 ```
 - Press `Enter` for a new line.
-- Press `Ctrl+S` (or `Ctrl+Enter`) to submit.
+- Press `Alt+→` (`Alt+RightArrow`, or `Ctrl+S` / `Ctrl+Enter`) to submit.
+- Press `Ctrl+Right` / `Ctrl+Left` to jump words forward / backward.
 - Press `Ctrl+C` to cancel.
 
 ### 3. File References & Live Autocomplete (`@filename`)
@@ -116,7 +117,8 @@ $ ask -i
 - **Session Memory**: Remembers context across turns.
 - **Mouse Selection**: Click and drag to select text in chat history, then press `y`, `Enter`, or `Ctrl+Shift+C` to copy to clipboard.
 - **Keyboard Shortcuts**:
-  - `Ctrl+S` (or `Ctrl+Enter`) — Send prompt
+  - `Alt+→` (`Alt+RightArrow`, or `Ctrl+S` / `Ctrl+Enter`) — Send prompt
+  - `Ctrl+Right` / `Ctrl+Left` — Jump word forward / backward
   - `Enter` — Insert newline in prompt
   - `Up` / `Down` — Navigate history & prompt
   - `Shift+Arrows` — Highlight text in history
@@ -154,15 +156,16 @@ git diff HEAD~1 | ask "identify any security risks in this diff"
 ss -tulpn | ask "which ports are exposed to the public internet?"
 ```
 
-### 7. AI Shell Autocompletion (`Alt+RightArrow`)
+### 7. Ghost-Complete: AI Shell Autocompletion (`Alt+RightArrow`)
 Complete commands in-place right at your terminal prompt:
 ```bash
-# Enable shell completion hook
-ask --toggle-ghost
+# Toggle ghost-complete shell integration on or off
+ask --ghost-complete
 ```
-- Type any partial command or prompt (e.g. `get-proc` or `# find large files`).
+- Type any partial command or natural language intent (e.g. `get-proc` or `# find large files`).
 - Press **`Alt+RightArrow`** to instantly complete the line with the AI recommendation.
-- Press **`Enter`** once to execute.
+- Press **`Enter`** to execute.
+- Automatically build-aware: injects your OS distribution, architecture, shell version, package managers, and dynamic elevation into prompt context.
 - Supported shells: PowerShell, Bash, Zsh, Fish.
 
 ### 8. Changing Models

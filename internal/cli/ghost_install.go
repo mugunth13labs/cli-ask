@@ -277,7 +277,7 @@ func InstallShellGhost() error {
 	}
 
 	printSafetyWarning()
-	fmt.Println("\x1b[1;32m[✓] Ghost autocompletion: Enabled\x1b[0m (Trigger: Alt+RightArrow)")
+	fmt.Println("\x1b[1;32m[✓] Ghost-Complete: Enabled\x1b[0m (Trigger: Alt+RightArrow)")
 	if shellType == "powershell" {
 		fmt.Println("Restart your PowerShell session or run: . $PROFILE")
 	} else {
@@ -339,7 +339,7 @@ func UninstallShellGhost() error {
 	scriptFilePath := filepath.Join(home, ".config", "ask", "scripts", filename)
 	_ = os.Remove(scriptFilePath)
 
-	fmt.Println("[○] Ghost autocompletion: Disabled")
+	fmt.Println("[○] Ghost-Complete: Disabled")
 	fmt.Println("Changes will take effect in new shells, or restart your current session.")
 	return nil
 }

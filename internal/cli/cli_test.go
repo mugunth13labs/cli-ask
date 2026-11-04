@@ -341,13 +341,23 @@ func TestMicroEditorOperations(t *testing.T) {
 		t.Errorf("expected submit on xterm Ctrl+Enter")
 	}
 
-	// 3a. Ctrl+S (byte 19) -> MUST submit
+	// 3a. Alt+RightArrow (\x1b[1;3C, \x1b\x1b[C) -> MUST submit (default chord)
+	submit, cancel = processInput(ed, []byte("\x1b[1;3C"))
+	if !submit || cancel {
+		t.Errorf("expected submit on Alt+RightArrow")
+	}
+	submit, cancel = processInput(ed, []byte("\x1b\x1b[C"))
+	if !submit || cancel {
+		t.Errorf("expected submit on macOS Alt+RightArrow")
+	}
+
+	// 3b. Ctrl+S (byte 19) -> MUST submit
 	submit, cancel = processInput(ed, []byte{19})
 	if !submit || cancel {
 		t.Errorf("expected submit on byte 19 (Ctrl+S)")
 	}
 
-	// 3b. Alt+Enter (\x1b\r and \x1b\n) -> MUST submit
+	// 3c. Alt+Enter (\x1b\r and \x1b\n) -> MUST submit
 	submit, cancel = processInput(ed, []byte("\x1b\r"))
 	if !submit || cancel {
 		t.Errorf("expected submit on Alt+Enter CR")
@@ -357,7 +367,7 @@ func TestMicroEditorOperations(t *testing.T) {
 		t.Errorf("expected submit on Alt+Enter LF")
 	}
 
-	// 3c. Kitty / xterm Ctrl+S (\x1b[115;5u, \x1b[27;5;115~) -> MUST submit
+	// 3d. Kitty / xterm Ctrl+S (\x1b[115;5u, \x1b[27;5;115~) -> MUST submit
 	submit, cancel = processInput(ed, []byte("\x1b[115;5u"))
 	if !submit || cancel {
 		t.Errorf("expected submit on Kitty Ctrl+S")
@@ -553,7 +563,7 @@ func TestFormatInlineComposerBox(t *testing.T) {
 	ed.Lines = []string{"how do I check open ports in linux?", "preferably with ss"}
 	top, lines, bottom, _, _, _ := formatInlineComposerBox(ed, 80, 5, 0, "")
 
-	if !strings.Contains(top, "─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ]") {
+	if !strings.Contains(top, "─ ask prompt [ Alt+→: Send | Ctrl+C: Cancel ]") {
 		t.Errorf("expected header in top border, got: %q", top)
 	}
 	if len(lines) != 2 {
@@ -689,5 +699,34 @@ func TestNormalizeVersion(t *testing.T) {
 		if got != c.expected {
 			t.Errorf("expected %q for %q, got %q", c.expected, c.input, got)
 		}
+	}
+}
+
+func TestMicroEditorWordNavigation(t *testing.T) {
+	ed := NewMicroEditor("", "")
+	ed.Lines = []string{"hello world test"}
+	ed.CursorRow = 0
+	ed.CursorCol = 0
+
+	// 1. Ctrl+Right jumps across "hello " to end of "world" or start of next word
+	processInput(ed, []byte("\x1b[1;5C"))
+	if ed.CursorCol != 5 { // end of "hello"
+		t.Fatalf("expected CursorCol=5 after first word jump right, got %d", ed.CursorCol)
+	}
+
+	processInput(ed, []byte("\x1b[1;5C"))
+	if ed.CursorCol != 11 { // end of "world"
+		t.Fatalf("expected CursorCol=11 after second word jump right, got %d", ed.CursorCol)
+	}
+
+	// 2. Ctrl+Left jumps backward to start of "world"
+	processInput(ed, []byte("\x1b[1;5D"))
+	if ed.CursorCol != 6 { // start of "world"
+		t.Fatalf("expected CursorCol=6 after word jump left, got %d", ed.CursorCol)
+	}
+
+	processInput(ed, []byte("\x1b[1;5D"))
+	if ed.CursorCol != 0 { // start of "hello"
+		t.Fatalf("expected CursorCol=0 after second word jump left, got %d", ed.CursorCol)
 	}
 }

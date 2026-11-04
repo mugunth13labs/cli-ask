@@ -284,7 +284,7 @@ func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Ctrl+S") || !strings.Contains(header, "/help /clear /model /exit") {
+	if !strings.Contains(header, "Alt+→") || !strings.Contains(header, "/help /clear /model /exit") {
 		t.Fatalf("expected header to contain slash command hints, got: %q", header)
 	}
 
@@ -485,12 +485,30 @@ func TestChatUIAlternativeSubmitAndIgnoreRules(t *testing.T) {
 	cfg := &Config{Model: "openai/gpt-4o-mini"}
 	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
 
+	// 0. Alt+RightArrow (\x1b[1;3C) submits prompt (default submit chord)
+	chat.PromptLines = []string{"test alt+rightarrow submit"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("test alt+rightarrow submit")
+	chat.HandleKey([]byte("\x1b[1;3C"))
+	if len(chat.Turns) == 0 || chat.Turns[len(chat.Turns)-1].Content != "test alt+rightarrow submit" {
+		t.Fatalf("expected turn submitted with Alt+RightArrow, got turns: %+v", chat.Turns)
+	}
+
+	// 0b. macOS Alt+RightArrow (\x1b\x1b[C) submits prompt
+	chat.PromptLines = []string{"test macos alt+rightarrow submit"}
+	chat.PromptRow = 0
+	chat.PromptCol = len("test macos alt+rightarrow submit")
+	chat.HandleKey([]byte("\x1b\x1b[C"))
+	if len(chat.Turns) < 2 || chat.Turns[len(chat.Turns)-1].Content != "test macos alt+rightarrow submit" {
+		t.Fatalf("expected turn submitted with macOS Alt+RightArrow, got turns: %+v", chat.Turns)
+	}
+
 	// 1. Ctrl+S (ASCII 19) submits prompt
 	chat.PromptLines = []string{"test ctrl+s submit"}
 	chat.PromptRow = 0
 	chat.PromptCol = len("test ctrl+s submit")
 	chat.HandleKey([]byte{19})
-	if len(chat.Turns) == 0 || chat.Turns[len(chat.Turns)-1].Content != "test ctrl+s submit" {
+	if len(chat.Turns) < 3 || chat.Turns[len(chat.Turns)-1].Content != "test ctrl+s submit" {
 		t.Fatalf("expected turn submitted with Ctrl+S, got turns: %+v", chat.Turns)
 	}
 
@@ -499,7 +517,7 @@ func TestChatUIAlternativeSubmitAndIgnoreRules(t *testing.T) {
 	chat.PromptRow = 0
 	chat.PromptCol = len("test alt+enter submit")
 	chat.HandleKey([]byte("\x1b\r"))
-	if len(chat.Turns) < 2 || chat.Turns[len(chat.Turns)-1].Content != "test alt+enter submit" {
+	if len(chat.Turns) < 4 || chat.Turns[len(chat.Turns)-1].Content != "test alt+enter submit" {
 		t.Fatalf("expected turn submitted with Alt+Enter, got turns: %+v", chat.Turns)
 	}
 
@@ -508,7 +526,7 @@ func TestChatUIAlternativeSubmitAndIgnoreRules(t *testing.T) {
 	chat.PromptRow = 0
 	chat.PromptCol = len("test kitty ctrl+s submit")
 	chat.HandleKey([]byte("\x1b[115;5u"))
-	if len(chat.Turns) < 3 || chat.Turns[len(chat.Turns)-1].Content != "test kitty ctrl+s submit" {
+	if len(chat.Turns) < 5 || chat.Turns[len(chat.Turns)-1].Content != "test kitty ctrl+s submit" {
 		t.Fatalf("expected turn submitted with Kitty Ctrl+S, got turns: %+v", chat.Turns)
 	}
 
@@ -569,5 +587,35 @@ func TestChatUIAutocompleteFlow(t *testing.T) {
 	chat.HandleKey(pasteWithAt)
 	if chat.Auto.Active {
 		t.Fatalf("pasted multi-character string must NOT trigger autocomplete")
+	}
+}
+
+func TestChatUIWordNavigation(t *testing.T) {
+	cfg := &Config{Model: "gpt-4"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
+	chat.PromptLines = []string{"alpha beta gamma"}
+	chat.PromptRow = 0
+	chat.PromptCol = 0
+
+	// 1. Ctrl+Right jumps across "alpha " to end of "beta" or start of next word
+	chat.HandleKey([]byte("\x1b[1;5C"))
+	if chat.PromptCol != 5 { // end of "alpha"
+		t.Fatalf("expected PromptCol=5 after first word jump right, got %d", chat.PromptCol)
+	}
+
+	chat.HandleKey([]byte("\x1b[1;5C"))
+	if chat.PromptCol != 10 { // end of "beta"
+		t.Fatalf("expected PromptCol=10 after second word jump right, got %d", chat.PromptCol)
+	}
+
+	// 2. Ctrl+Left jumps backward to start of "beta"
+	chat.HandleKey([]byte("\x1b[1;5D"))
+	if chat.PromptCol != 6 { // start of "beta"
+		t.Fatalf("expected PromptCol=6 after word jump left, got %d", chat.PromptCol)
+	}
+
+	chat.HandleKey([]byte("\x1b[1;5D"))
+	if chat.PromptCol != 0 { // start of "alpha"
+		t.Fatalf("expected PromptCol=0 after second word jump left, got %d", chat.PromptCol)
 	}
 }

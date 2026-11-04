@@ -54,8 +54,10 @@ func readChatPromptCooked(reader *bufio.Reader) (string, error) {
 			}
 		}
 
-		// Detect terminal escape sequences for Ctrl+Enter, Alt+Enter, Ctrl+S
-		hasSubmitSeq := strings.Contains(line, "\x1b[13;5u") ||
+		// Detect terminal escape sequences for Alt+Right, Ctrl+Enter, Alt+Enter, Ctrl+S
+		hasSubmitSeq := strings.Contains(line, "\x1b[1;3C") ||
+			strings.Contains(line, "\x1b\x1b[C") ||
+			strings.Contains(line, "\x1b[13;5u") ||
 			strings.Contains(line, "\x1b[27;5;13~") ||
 			strings.Contains(line, "\x1b[10;5u") ||
 			strings.Contains(line, "\x1b[27;5;10~") ||
@@ -69,6 +71,8 @@ func readChatPromptCooked(reader *bufio.Reader) (string, error) {
 			strings.Contains(line, "\x1b[27;5;83~") ||
 			strings.Contains(line, "\x13")
 		if hasSubmitSeq {
+			line = strings.ReplaceAll(line, "\x1b[1;3C", "")
+			line = strings.ReplaceAll(line, "\x1b\x1b[C", "")
 			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
 			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
 			line = strings.ReplaceAll(line, "\x1b[10;5u", "")
@@ -151,12 +155,12 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		hints = "↑/↓: Browse | Shift+Arrows: Select | ↑: Prompt "
 	} else {
 		// In Prompt composer
-		hints = "Ctrl+S: Send | /help /clear /model /exit | Ctrl+C: Exit "
+		hints = "Alt+→: Send | /help /clear /model /exit | Ctrl+C: Exit "
 		if width < 85 {
-			hints = "Ctrl+S: Send | / commands | Ctrl+C: Exit "
+			hints = "Alt+→: Send | / commands | Ctrl+C: Exit "
 		}
 		if width < 60 {
-			hints = "Ctrl+S: Send | Ctrl+C: Exit "
+			hints = "Alt+→: Send | Ctrl+C: Exit "
 		}
 	}
 
@@ -454,7 +458,7 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 	if opts.IsStdoutTerminal {
 		fmt.Printf("ask v%s — Continuous Chat Mode\n", version)
 		fmt.Printf("Model: %s | Session: %s\n", cfg.Model, sessionID)
-		fmt.Println("Send: Ctrl+S | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
+		fmt.Println("Send: Alt+→ (or Ctrl+S) | Newline: Enter | Exit: /exit, /q | Cancel: Ctrl+C")
 		fmt.Println()
 	}
 

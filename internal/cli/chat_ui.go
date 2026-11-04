@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -717,6 +718,18 @@ func parseEscapeSeq(b []byte) int {
 	if len(b) == 1 {
 		return 1
 	}
+	if b[1] == 0x1b {
+		// ESC ESC ... (e.g. \x1b\x1b[C for Alt+Right on macOS)
+		if len(b) >= 3 && b[2] == '[' {
+			for i := 3; i < len(b); i++ {
+				if b[i] >= 0x40 && b[i] <= 0x7E {
+					return i + 1
+				}
+			}
+			return len(b)
+		}
+		return 2
+	}
 	if b[1] == '[' {
 		// CSI sequence: \x1b[ ... finalByte (0x40-0x7E)
 		for i := 2; i < len(b); i++ {
@@ -830,6 +843,60 @@ func (ui *ChatUI) handleRightArrow() {
 	}
 }
 
+func (ui *ChatUI) handleWordRight() {
+	ui.Selecting = false
+	if ui.ActiveRegion != RegionPrompt {
+		return
+	}
+	runes := []rune(ui.PromptLines[ui.PromptRow])
+	lineLen := len(runes)
+	if ui.PromptCol >= lineLen {
+		if ui.PromptRow < len(ui.PromptLines)-1 {
+			ui.PromptRow++
+			ui.PromptCol = 0
+		}
+		ui.adjustPromptScroll()
+		return
+	}
+	col := ui.PromptCol
+	for col < lineLen && unicode.IsSpace(runes[col]) {
+		col++
+	}
+	for col < lineLen && !unicode.IsSpace(runes[col]) {
+		col++
+	}
+	ui.PromptCol = col
+	ui.adjustPromptScroll()
+}
+
+func (ui *ChatUI) handleWordLeft() {
+	ui.Selecting = false
+	if ui.ActiveRegion != RegionPrompt {
+		return
+	}
+	if ui.PromptCol == 0 {
+		if ui.PromptRow > 0 {
+			ui.PromptRow--
+			ui.PromptCol = len([]rune(ui.PromptLines[ui.PromptRow]))
+		}
+		ui.adjustPromptScroll()
+		return
+	}
+	runes := []rune(ui.PromptLines[ui.PromptRow])
+	col := ui.PromptCol
+	if col > len(runes) {
+		col = len(runes)
+	}
+	for col > 0 && unicode.IsSpace(runes[col-1]) {
+		col--
+	}
+	for col > 0 && !unicode.IsSpace(runes[col-1]) {
+		col--
+	}
+	ui.PromptCol = col
+	ui.adjustPromptScroll()
+}
+
 func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 	fullPrompt := strings.TrimSpace(strings.Join(ui.PromptLines, "\n"))
 	if fullPrompt == "" {
@@ -849,7 +916,8 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 			"  /help, /?          Show this help message\n" +
 			"  /exit, /quit, /q   Exit ask chat\n\n" +
 			"keyboard shortcuts:\n" +
-			"  Ctrl+S             Send prompt (Ctrl+Enter / Alt+Enter also supported)\n" +
+			"  Alt+→ (Alt+Right)  Send prompt (Ctrl+S / Ctrl+Enter also supported)\n" +
+			"  Ctrl+Right / Left  Jump word forward / backward\n" +
 			"  Enter              Insert newline in prompt\n" +
 			"  Up / Down          Navigate history & prompt\n" +
 			"  Shift+Arrows       Select text in history\n" +
@@ -1035,8 +1103,20 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				continue
 			}
 
-			// 1c. Ctrl+Enter / Alt+Enter / Ctrl+S submit sequences
-			if bytes.Equal(seq, []byte("\x1b[13;5u")) ||
+			// 1b2. Ctrl+Arrows for word jump in prompt
+			if bytes.Equal(seq, []byte("\x1b[1;5C")) || bytes.Equal(seq, []byte("\x1b[5C")) {
+				ui.handleWordRight()
+				continue
+			}
+			if bytes.Equal(seq, []byte("\x1b[1;5D")) || bytes.Equal(seq, []byte("\x1b[5D")) {
+				ui.handleWordLeft()
+				continue
+			}
+
+			// 1c. Alt+Right / Ctrl+Enter / Alt+Enter / Ctrl+S submit sequences
+			if bytes.Equal(seq, []byte("\x1b[1;3C")) ||
+				bytes.Equal(seq, []byte("\x1b\x1b[C")) ||
+				bytes.Equal(seq, []byte("\x1b[13;5u")) ||
 				bytes.Equal(seq, []byte("\x1b[27;5;13~")) ||
 				bytes.Equal(seq, []byte("\x1b[10;5u")) ||
 				bytes.Equal(seq, []byte("\x1b[27;5;10~")) ||

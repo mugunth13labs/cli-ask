@@ -65,13 +65,13 @@ func parseCLIArgs(args []string) ParsedArgs {
 		case "-i", "--chatbot":
 			result.Action = "chatbot"
 			return result
-		case "--toggle-ghost":
+		case "--ghost-complete", "--toggle-ghost-complete", "--toggle-ghost":
 			result.Action = "toggle-ghost"
 			return result
-		case "--install-shell-ghost":
+		case "--install-ghost-complete", "--install-shell-ghost":
 			result.Action = "install-shell-ghost"
 			return result
-		case "--uninstall-shell-ghost":
+		case "--uninstall-ghost-complete", "--uninstall-shell-ghost":
 			result.Action = "uninstall-shell-ghost"
 			return result
 		case "--uninstall-self", "--uninstall":
@@ -98,7 +98,7 @@ func parseCLIArgs(args []string) ParsedArgs {
 		}
 		return result
 	}
-	if args[0] == "--complete" || args[0] == "--suggest" {
+	if args[0] == "--complete" || args[0] == "--suggest" || args[0] == "--ghost-complete" {
 		result.Action = "complete"
 		if len(args) > 1 {
 			result.ActionArg = strings.Join(args[1:], " ")
@@ -261,7 +261,7 @@ func printHelp() {
 Usage:
   ask <prompt>                  Ask any question (remembers terminal session)
   ask "your prompt here"        Ask with quotes
-  ask                           Inline multiline composer (Ctrl+S to submit)
+  ask                           Inline multiline composer (Alt+→ to submit)
   ask --cg, --codegen <prompt>  Pure code generation mode (no extra fluff or titles)
   ask --chatbot, -i             Start immersive continuous interactive chat session
   echo "code" | ask "explain"   Pipe stdin to ask
@@ -283,10 +283,8 @@ Session Memory:
   ask --clear, -c               Clear current terminal's conversation history
   ask --no-context <prompt>     Run query without reading or updating session history
 
-Shell Autocompletion:
-  ask --toggle-ghost            Toggle AI command completion in shell profile (Alt+RightArrow)
-  ask --install-shell-ghost     Install shell completion hook into profile
-  ask --uninstall-shell-ghost   Remove shell completion hook from profile
+Ghost-Complete (AI Shell Autocompletion):
+  ask --ghost-complete          Toggle AI ghost-complete in shell profile (Alt+RightArrow)
   ask --complete <line>         Headless query for single-line command completion
 
 Configuration:
@@ -350,11 +348,11 @@ func Run(cmdArgs []string) {
 		fmt.Printf("Model:   %s\n", cfg.Model)
 		fmt.Printf("API Key: %s\n", maskedKey)
 		fmt.Printf("Session: %s\n", getSessionID())
-		ghostStatus := "Disabled (run: ask --toggle-ghost)"
+		ghostStatus := "Disabled (run: ask --ghost-complete)"
 		if installed, _, _ := IsShellGhostInstalled(); installed {
 			ghostStatus = "Enabled (Trigger: Alt+RightArrow)"
 		}
-		fmt.Printf("Ghost Autocompletion: %s\n", ghostStatus)
+		fmt.Printf("Ghost-Complete: %s\n", ghostStatus)
 		sysCtx := GetActiveSystemContext()
 		elevated := isProcessElevated()
 		fmt.Printf("OS:      %s (%s, %s)\n", sysCtx.OSDistribution, sysCtx.OSBuild, sysCtx.Architecture)

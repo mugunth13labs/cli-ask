@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -209,6 +210,52 @@ func (e *MicroEditor) MoveRight() {
 	}
 }
 
+func (e *MicroEditor) MoveWordRight() {
+	runes := []rune(e.Lines[e.CursorRow])
+	lineLen := len(runes)
+	if e.CursorCol >= lineLen {
+		if e.CursorRow < len(e.Lines)-1 {
+			e.CursorRow++
+			e.CursorCol = 0
+		}
+		return
+	}
+	col := e.CursorCol
+	// Skip current whitespace
+	for col < lineLen && unicode.IsSpace(runes[col]) {
+		col++
+	}
+	// Skip word characters
+	for col < lineLen && !unicode.IsSpace(runes[col]) {
+		col++
+	}
+	e.CursorCol = col
+}
+
+func (e *MicroEditor) MoveWordLeft() {
+	if e.CursorCol == 0 {
+		if e.CursorRow > 0 {
+			e.CursorRow--
+			e.CursorCol = len([]rune(e.Lines[e.CursorRow]))
+		}
+		return
+	}
+	runes := []rune(e.Lines[e.CursorRow])
+	col := e.CursorCol
+	if col > len(runes) {
+		col = len(runes)
+	}
+	// Skip preceding whitespace
+	for col > 0 && unicode.IsSpace(runes[col-1]) {
+		col--
+	}
+	// Skip preceding word characters
+	for col > 0 && !unicode.IsSpace(runes[col-1]) {
+		col--
+	}
+	e.CursorCol = col
+}
+
 func (e *MicroEditor) MoveUp() {
 	if e.CursorRow > 0 {
 		e.CursorRow--
@@ -333,15 +380,15 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 	cursorRowInWindow := visRow - scrollOffset
 
 	// Top border with scroll up indicator if scrolled down
-	header := "─ ask prompt [ Ctrl+S: Send | Ctrl+C: Cancel ] "
+	header := "─ ask prompt [ Alt+→: Send | Ctrl+C: Cancel ] "
 	if scrollOffset > 0 {
 		if targetDesc != "" {
-			header = fmt.Sprintf("─ ask prompt [ Target: %s | ▲ %d above | Ctrl+S: Send | Ctrl+C: Cancel ] ", targetDesc, scrollOffset)
+			header = fmt.Sprintf("─ ask prompt [ Target: %s | ▲ %d above | Alt+→: Send | Ctrl+C: Cancel ] ", targetDesc, scrollOffset)
 		} else {
-			header = fmt.Sprintf("─ ask prompt [ ▲ %d above | Ctrl+S: Send | Ctrl+C: Cancel ] ", scrollOffset)
+			header = fmt.Sprintf("─ ask prompt [ ▲ %d above | Alt+→: Send | Ctrl+C: Cancel ] ", scrollOffset)
 		}
 	} else if targetDesc != "" {
-		header = fmt.Sprintf("─ ask prompt [ Target: %s | Ctrl+S: Send | Ctrl+C: Cancel ] ", targetDesc)
+		header = fmt.Sprintf("─ ask prompt [ Target: %s | Alt+→: Send | Ctrl+C: Cancel ] ", targetDesc)
 	}
 
 	headerRunes := utf8.RuneCountInString(header)
@@ -925,10 +972,13 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 			rem := data[i:]
 			remStr := string(rem)
 
-			// 1. Check for Ctrl+Enter, Alt+Enter, or Ctrl+S sequences:
+			// 1. Check for Alt+Right submit, Ctrl+Enter, Alt+Enter, or Ctrl+S sequences:
+			// \x1b[1;3C (Alt+Right), \x1b\x1b[C (macOS Alt+Right),
 			// \x1b[13;5u (CSI u), \x1b[27;5;13~ (xterm), \x1b[10;5u, \x1b[27;5;10~, \x1b[10~, \x1b[13~, \x1b\r, \x1b\n,
 			// \x1b[115;5u / \x1b[83;5u (Kitty Ctrl+S), \x1b[27;5;115~ / \x1b[27;5;83~ (xterm Ctrl+S)
-			if strings.HasPrefix(remStr, "\x1b[13;5u") ||
+			if strings.HasPrefix(remStr, "\x1b[1;3C") ||
+				strings.HasPrefix(remStr, "\x1b\x1b[C") ||
+				strings.HasPrefix(remStr, "\x1b[13;5u") ||
 				strings.HasPrefix(remStr, "\x1b[27;5;13~") ||
 				strings.HasPrefix(remStr, "\x1b[10;5u") ||
 				strings.HasPrefix(remStr, "\x1b[27;5;10~") ||
@@ -993,9 +1043,34 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 					continue
 				}
 
-				// Modified arrow keys like \x1b[1;5A (Ctrl+Up), etc.
+				// Modified arrow keys like \x1b[1;5A (Ctrl+Up), \x1b[1;3C (Alt+Right), etc.
 				if len(rem) >= 6 && rem[2] == '1' && rem[3] == ';' {
-					switch rem[5] {
+					mod := rem[4]
+					dir := rem[5]
+					if mod == '3' && dir == 'C' { // Alt+Right -> Submit
+						return true, false
+					}
+					if mod == '5' { // Ctrl+Arrow
+						switch dir {
+						case 'C': // Ctrl+Right -> Word right
+							editor.MoveWordRight()
+							i += 6
+							continue
+						case 'D': // Ctrl+Left -> Word left
+							editor.MoveWordLeft()
+							i += 6
+							continue
+						case 'A':
+							editor.MoveUp()
+							i += 6
+							continue
+						case 'B':
+							editor.MoveDown()
+							i += 6
+							continue
+						}
+					}
+					switch dir {
 					case 'A':
 						editor.MoveUp()
 						i += 6
@@ -1011,6 +1086,20 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 					case 'D':
 						editor.MoveLeft()
 						i += 6
+						continue
+					}
+				}
+
+				// rxvt/xterm style: \x1b[5C (Ctrl+Right), \x1b[5D (Ctrl+Left)
+				if len(rem) >= 4 && rem[2] == '5' {
+					switch rem[3] {
+					case 'C':
+						editor.MoveWordRight()
+						i += 4
+						continue
+					case 'D':
+						editor.MoveWordLeft()
+						i += 4
 						continue
 					}
 				}
