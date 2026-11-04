@@ -1,3 +1,14 @@
+cli-ask (0.7.0-1) unstable; urgency=medium
+
+  * Standardize Alt+RightArrow (Alt+→) as the default submit key across all interactive workflows.
+  * Rebrand shell AI autocompletion to Ghost-Complete (ask --ghost-complete).
+  * Add build-aware system context probing and caching (OS distro/build, shell & version, package managers).
+  * Add dynamic process elevation probing (root / Administrator) without post-processing.
+  * Add dedicated word navigation via Ctrl+Right/Left arrow keys in composer and chat UI.
+  * Maintain backward-compatible fallbacks for Ctrl+S, Ctrl+Enter, and Alt+Enter.
+
+ -- Mugunthan <mugunth13@proton.me>  Wed, 04 Nov 2026 20:50:00 +0800
+
 cli-ask (0.4.2-1) unstable; urgency=medium
 
   * Fix Ctrl+Enter submission on terminal emulators that swallow Ctrl modifier with Enter.
