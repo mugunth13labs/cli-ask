@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,13 @@ import (
 	"runtime"
 	"strings"
 	"time"
+)
+
+var (
+	// ErrSuggestionIncomplete indicates a truncated or unfinished command suggestion.
+	ErrSuggestionIncomplete = errors.New("suggestion incomplete or truncated")
+	// ErrSuggestionInvalid indicates a command suggestion with unbalanced or broken syntax.
+	ErrSuggestionInvalid = errors.New("suggestion has invalid syntax or unbalanced quotes/brackets")
 )
 
 type ghostRequest struct {
@@ -26,7 +34,8 @@ type ghostRequest struct {
 
 type ghostResponse struct {
 	Choices []struct {
-		Message Message `json:"message"`
+		Message      Message `json:"message"`
+		FinishReason string  `json:"finish_reason"`
 	} `json:"choices"`
 }
 
@@ -99,12 +108,12 @@ func QueryGhostCompletion(ctx context.Context, cfg *Config, inputLine string) (s
 	osName := runtime.GOOS
 
 	sysPrompt := fmt.Sprintf(`You are a high-speed shell command autocompletion engine for %s running on %s.
-The user is currently typing a command in their terminal prompt.
+The user is currently typing in their terminal prompt.
 Current prompt input: %q
 
 Instructions:
-1. Predict the full intended shell command based on what the user has typed so far.
-2. Return ONLY the single complete, executable command line.
+1. Predict the full intended shell command or script block based on what the user has typed so far.
+2. Return ONLY the complete, executable command or script block (maximum 5 lines).
 3. Do NOT wrap output in markdown fences or quotes.
 4. Do NOT include explanations, commentary, or multiple options.
 5. If the input is already a complete command, return it as is.`, shell, osName, inputLine)
@@ -118,7 +127,7 @@ Instructions:
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0.1,
-		MaxTokens:   128,
+		MaxTokens:   256,
 		Reasoning: &struct {
 			Effort string `json:"effort,omitempty"`
 		}{Effort: "none"},
@@ -160,7 +169,12 @@ Instructions:
 		return "", fmt.Errorf("no choices returned (body: %s)", string(respBodyBytes))
 	}
 
-	raw := parsed.Choices[0].Message.Content
+	choice := parsed.Choices[0]
+	if choice.FinishReason == "length" {
+		return "", fmt.Errorf("%w: API response truncated at max token limit", ErrSuggestionIncomplete)
+	}
+
+	raw := choice.Message.Content
 	cleaned := CleanGhostSuggestion(inputLine, raw)
 	if cleaned == "" {
 		return "", fmt.Errorf("empty suggestion after cleaning (raw: %q, body: %s)", raw, string(respBodyBytes))
@@ -182,7 +196,8 @@ func CleanGhostSuggestion(inputLine, rawOutput string) string {
 		var codeLines []string
 		inBlock := false
 		for _, l := range lines {
-			if strings.HasPrefix(l, "```") {
+			trimmedLine := strings.TrimSpace(l)
+			if strings.HasPrefix(trimmedLine, "```") {
 				inBlock = !inBlock
 				continue
 			}
@@ -197,17 +212,20 @@ func CleanGhostSuggestion(inputLine, rawOutput string) string {
 		}
 	}
 
-	// Strip single backticks or quotes
-	output = strings.Trim(output, "`")
-	output = strings.Trim(output, "\"")
-	output = strings.Trim(output, "'")
+	// Normalize CRLF to LF
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	output = strings.TrimSpace(output)
 
-	// If multi-line, take only the first non-empty line
-	if idx := strings.Index(output, "\n"); idx != -1 {
-		output = strings.TrimSpace(output[:idx])
+	// Strip single backticks or quotes if they wrap the entire snippet
+	if (strings.HasPrefix(output, "`") && strings.HasSuffix(output, "`")) ||
+		(strings.HasPrefix(output, "\"") && strings.HasSuffix(output, "\"")) ||
+		(strings.HasPrefix(output, "'") && strings.HasSuffix(output, "'")) {
+		if len(output) >= 2 {
+			output = output[1 : len(output)-1]
+		}
 	}
 
-	// If input starts with a comment or prompt prefix, strip it
+	// If input starts with a comment, strip comment marker from output
 	trimmedInput := strings.TrimSpace(inputLine)
 	if strings.HasPrefix(trimmedInput, "#") {
 		output = strings.TrimPrefix(output, "#")
@@ -240,14 +258,141 @@ func CleanGhostSuggestion(inputLine, rawOutput string) string {
 	return output
 }
 
+// ValidateCommandCompleteness verifies that a suggested command is structurally complete,
+// does not exceed the maximum allowed line count (5 lines), has balanced quotes/brackets,
+// and does not end in a dangling pipe or continuation operator.
+func ValidateCommandCompleteness(inputLine, candidate string) error {
+	trimmed := strings.TrimSpace(candidate)
+	if trimmed == "" {
+		return fmt.Errorf("%w: empty candidate", ErrSuggestionIncomplete)
+	}
+
+	// Enforce maximum 5 lines
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) > 5 {
+		return fmt.Errorf("%w: exceeds maximum 5 lines (got %d)", ErrSuggestionIncomplete, len(lines))
+	}
+
+	// Reject if candidate is identical to trimmed input
+	if trimmed == strings.TrimSpace(inputLine) {
+		return fmt.Errorf("%w: candidate identical to input", ErrSuggestionIncomplete)
+	}
+
+	// Trailing dangling operators check (incomplete statements)
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	trailingDangling := []string{"|", "&&", "||", "\\", ","}
+	for _, op := range trailingDangling {
+		if strings.HasSuffix(lastLine, op) {
+			return fmt.Errorf("%w: ends with incomplete operator %q", ErrSuggestionIncomplete, op)
+		}
+	}
+
+	// Quote and bracket balance checking
+	runes := []rune(trimmed)
+	var (
+		inSingleQuote bool
+		inDoubleQuote bool
+		inBacktick    bool
+		bracketStack  []rune
+		escaped       bool
+	)
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if r == '\\' && !inSingleQuote {
+			escaped = true
+			continue
+		}
+
+		if inSingleQuote {
+			if r == '\'' {
+				inSingleQuote = false
+			}
+			continue
+		}
+
+		if inDoubleQuote {
+			if r == '"' {
+				inDoubleQuote = false
+			}
+			continue
+		}
+
+		if inBacktick {
+			if r == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		switch r {
+		case '\'':
+			inSingleQuote = true
+		case '"':
+			inDoubleQuote = true
+		case '`':
+			inBacktick = true
+		case '(', '{', '[':
+			bracketStack = append(bracketStack, r)
+		case ')':
+			if len(bracketStack) == 0 || bracketStack[len(bracketStack)-1] != '(' {
+				return fmt.Errorf("%w: unmatched closing parenthesis ')'", ErrSuggestionInvalid)
+			}
+			bracketStack = bracketStack[:len(bracketStack)-1]
+		case '}':
+			if len(bracketStack) == 0 || bracketStack[len(bracketStack)-1] != '{' {
+				return fmt.Errorf("%w: unmatched closing brace '}'", ErrSuggestionInvalid)
+			}
+			bracketStack = bracketStack[:len(bracketStack)-1]
+		case ']':
+			if len(bracketStack) == 0 || bracketStack[len(bracketStack)-1] != '[' {
+				return fmt.Errorf("%w: unmatched closing bracket ']'", ErrSuggestionInvalid)
+			}
+			bracketStack = bracketStack[:len(bracketStack)-1]
+		}
+	}
+
+	if inSingleQuote {
+		return fmt.Errorf("%w: unclosed single quote", ErrSuggestionIncomplete)
+	}
+	if inDoubleQuote {
+		return fmt.Errorf("%w: unclosed double quote", ErrSuggestionIncomplete)
+	}
+	if inBacktick {
+		return fmt.Errorf("%w: unclosed backtick", ErrSuggestionIncomplete)
+	}
+	if len(bracketStack) > 0 {
+		return fmt.Errorf("%w: unclosed bracket or parenthesis %q", ErrSuggestionIncomplete, string(bracketStack[len(bracketStack)-1]))
+	}
+
+	return nil
+}
+
 // HandleGhostCompleteCLI executes headless autocomplete query and writes the clean command to stdout.
+// Exit codes:
+//   0: Valid, complete single or multiline command printed to stdout.
+//   2: Suggestion rejected (incomplete, syntax error, length cutoff, or > 5 lines).
+//   1: Network, API key, or general runtime failure.
 func HandleGhostCompleteCLI(cfg *Config, inputLine string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	completed, err := QueryGhostCompletion(ctx, cfg, inputLine)
-	if err != nil || completed == "" {
+	if err != nil {
+		if errors.Is(err, ErrSuggestionIncomplete) || errors.Is(err, ErrSuggestionInvalid) {
+			os.Exit(2)
+		}
 		os.Exit(1)
+	}
+
+	if err := ValidateCommandCompleteness(inputLine, completed); err != nil {
+		os.Exit(2)
 	}
 
 	// Write raw completed command directly to stdout for shell capture

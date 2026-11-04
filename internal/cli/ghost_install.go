@@ -16,11 +16,27 @@ const (
 func getZshHookScript() string {
 	return `_ask_ghost_complete() {
     if [[ -n "$BUFFER" ]]; then
-        local chosen
+        local chosen exit_code
         chosen=$(ask --complete "$BUFFER")
-        if [[ $? -eq 0 && -n "$chosen" ]]; then
-            BUFFER="$chosen"
-            CURSOR=${#BUFFER}
+        exit_code=$?
+        if [[ $exit_code -eq 0 && -n "$chosen" ]]; then
+            if zsh -n -c "$chosen" 2>/dev/null; then
+                BUFFER="$chosen"
+                CURSOR=${#BUFFER}
+                zle reset-prompt
+                return
+            else
+                print -n "\e[90m [suggestion rejected: invalid syntax]\e[0m" >&2
+                sleep 0.6
+                zle reset-prompt
+            fi
+        elif [[ $exit_code -eq 2 ]]; then
+            print -n "\e[90m [suggestion rejected: incomplete]\e[0m" >&2
+            sleep 0.6
+            zle reset-prompt
+        elif [[ $exit_code -eq 1 ]]; then
+            print -n "\e[90m [autocomplete: network error]\e[0m" >&2
+            sleep 0.6
             zle reset-prompt
         fi
     fi
@@ -34,11 +50,24 @@ bindkey '^[^[[C' _ask_ghost_complete
 func getBashHookScript() string {
 	return `_ask_ghost_complete() {
     if [[ -n "$READLINE_LINE" ]]; then
-        local chosen
+        local chosen exit_code
         chosen=$(ask --complete "$READLINE_LINE")
-        if [[ $? -eq 0 && -n "$chosen" ]]; then
-            READLINE_LINE="$chosen"
-            READLINE_POINT=${#READLINE_LINE}
+        exit_code=$?
+        if [[ $exit_code -eq 0 && -n "$chosen" ]]; then
+            if bash -n <<< "$chosen" 2>/dev/null; then
+                READLINE_LINE="$chosen"
+                READLINE_POINT=${#READLINE_LINE}
+                return
+            else
+                printf "\e[90m [suggestion rejected: invalid syntax]\e[0m" >&2
+                sleep 0.6
+            fi
+        elif [[ $exit_code -eq 2 ]]; then
+            printf "\e[90m [suggestion rejected: incomplete]\e[0m" >&2
+            sleep 0.6
+        elif [[ $exit_code -eq 1 ]]; then
+            printf "\e[90m [autocomplete: network error]\e[0m" >&2
+            sleep 0.6
         fi
     fi
 }
@@ -56,15 +85,31 @@ func getPowerShellHookScript() string {
         [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
         if ($line -and $line.Trim().Length -gt 0) {
             $chosen = (& ask --complete "$line")
-            if ($LASTEXITCODE -eq 0 -and $chosen) {
+            $code = $LASTEXITCODE
+            if ($code -eq 0 -and $chosen) {
                 $text = (($chosen -join [char]10) -replace [char]13, "").Trim()
-                try {
-                    [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine($key, $arg)
-                    [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine($key, $arg)
-                    [Microsoft.PowerShell.PSConsoleReadLine]::DeleteToEnd($key, $arg)
-                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($text)
-                    [Microsoft.PowerShell.PSConsoleReadLine]::EndOfLine($key, $arg)
-                } catch {}
+                $t = $null
+                $errs = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$t, [ref]$errs)
+                if (-not $errs -or $errs.Count -eq 0) {
+                    try {
+                        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine($key, $arg)
+                        [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine($key, $arg)
+                        [Microsoft.PowerShell.PSConsoleReadLine]::DeleteToEnd($key, $arg)
+                        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($text)
+                        [Microsoft.PowerShell.PSConsoleReadLine]::EndOfLine($key, $arg)
+                    } catch {}
+                    return
+                } else {
+                    [Console]::Write([char]27 + "[90m [suggestion rejected: invalid syntax]" + [char]27 + "[0m")
+                    Start-Sleep -Milliseconds 600
+                }
+            } elseif ($code -eq 2) {
+                [Console]::Write([char]27 + "[90m [suggestion rejected: incomplete]" + [char]27 + "[0m")
+                Start-Sleep -Milliseconds 600
+            } elseif ($code -eq 1) {
+                [Console]::Write([char]27 + "[90m [autocomplete: network error]" + [char]27 + "[0m")
+                Start-Sleep -Milliseconds 600
             }
             try {
                 [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt($key, $arg)
@@ -81,9 +126,25 @@ func getFishHookScript() string {
     set -l buf (commandline)
     if test -n "$buf"
         set -l chosen (ask --complete "$buf")
-        if test $status -eq 0 -a -n "$chosen"
-            commandline -r "$chosen"
-            commandline -C (string length -- "$chosen")
+        set -l exit_code $status
+        if test $exit_code -eq 0 -a -n "$chosen"
+            if fish --no-execute -c "$chosen" 2>/dev/null
+                commandline -r "$chosen"
+                commandline -C (string length -- "$chosen")
+                commandline -f repaint
+                return
+            else
+                echo -en "\e[90m [suggestion rejected: invalid syntax]\e[0m" >&2
+                sleep 0.6
+                commandline -f repaint
+            end
+        else if test $exit_code -eq 2
+            echo -en "\e[90m [suggestion rejected: incomplete]\e[0m" >&2
+            sleep 0.6
+            commandline -f repaint
+        else if test $exit_code -eq 1
+            echo -en "\e[90m [autocomplete: network error]\e[0m" >&2
+            sleep 0.6
             commandline -f repaint
         end
     end
