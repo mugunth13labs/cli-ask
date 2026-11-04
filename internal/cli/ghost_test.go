@@ -210,6 +210,16 @@ func TestParseCLIArgsGhost(t *testing.T) {
 	if p7.Action != "uninstall-self" {
 		t.Errorf("expected action 'uninstall-self', got %q", p7.Action)
 	}
+
+	p8 := parseCLIArgs([]string{"--system-context"})
+	if p8.Action != "system-context" {
+		t.Errorf("expected action 'system-context', got %q", p8.Action)
+	}
+
+	p9 := parseCLIArgs([]string{"--env"})
+	if p9.Action != "system-context" {
+		t.Errorf("expected action 'system-context', got %q", p9.Action)
+	}
 }
 
 func TestDetectActiveShell(t *testing.T) {

@@ -254,6 +254,9 @@ func InstallShellGhost() error {
 
 	_ = cleanProfileEntries(profilePath)
 
+	// Probe and prime the build-aware system context cache immediately
+	_ = GetActiveSystemContext()
+
 	profileContent := ""
 	if data, readErr := os.ReadFile(profilePath); readErr == nil {
 		profileContent = string(data)

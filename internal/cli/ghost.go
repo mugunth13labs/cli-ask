@@ -104,10 +104,12 @@ func QueryGhostCompletion(ctx context.Context, cfg *Config, inputLine string) (s
 		return "", fmt.Errorf("missing api key")
 	}
 
-	shell := DetectActiveShell()
-	osName := runtime.GOOS
+	sysCtx := GetActiveSystemContext()
+	elevated := isProcessElevated()
+	envPrompt := sysCtx.FormatPromptContext(elevated)
 
 	sysPrompt := fmt.Sprintf(`You are a high-speed shell command autocompletion engine for %s running on %s.
+%s
 The user is currently typing in their terminal prompt.
 Current prompt input: %q
 
@@ -116,9 +118,9 @@ Instructions:
 2. Return ONLY the complete, executable command or script block (maximum 5 lines).
 3. Do NOT wrap output in markdown fences or quotes.
 4. Do NOT include explanations, commentary, or multiple options.
-5. If the input is already a complete command, return it as is.`, shell, osName, inputLine)
+5. If the input is already a complete command, return it as is.`, sysCtx.Shell, sysCtx.OSName, envPrompt, inputLine)
 
-	userPrompt := fmt.Sprintf("Complete this %s command: %s", shell, inputLine)
+	userPrompt := fmt.Sprintf("Complete this %s command: %s", sysCtx.Shell, inputLine)
 
 	reqBody := ghostRequest{
 		Model: cfg.Model,
@@ -260,7 +262,7 @@ func CleanGhostSuggestion(inputLine, rawOutput string) string {
 
 // ValidateCommandCompleteness verifies that a suggested command is structurally complete,
 // does not exceed the maximum allowed line count (5 lines), has balanced quotes/brackets,
-// and does not end in a dangling pipe or continuation operator.
+// does not end in a dangling pipe or continuation operator, and does not contain cross-OS foreign commands.
 func ValidateCommandCompleteness(inputLine, candidate string) error {
 	trimmed := strings.TrimSpace(candidate)
 	if trimmed == "" {
@@ -284,6 +286,19 @@ func ValidateCommandCompleteness(inputLine, candidate string) error {
 	for _, op := range trailingDangling {
 		if strings.HasSuffix(lastLine, op) {
 			return fmt.Errorf("%w: ends with incomplete operator %q", ErrSuggestionIncomplete, op)
+		}
+	}
+
+	// Cross-OS foreign artifact checks
+	if runtime.GOOS == "windows" {
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "sudo ") || strings.HasPrefix(lower, "export ") || strings.Contains(lower, "apt install") {
+			return fmt.Errorf("%w: unix-specific command proposed on windows", ErrSuggestionInvalid)
+		}
+	} else {
+		// Unix: reject Windows drive letters (e.g. C:\ or C:/)
+		if len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/') {
+			return fmt.Errorf("%w: windows drive path proposed on unix", ErrSuggestionInvalid)
 		}
 	}
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -75,6 +76,9 @@ func parseCLIArgs(args []string) ParsedArgs {
 			return result
 		case "--uninstall-self", "--uninstall":
 			result.Action = "uninstall-self"
+			return result
+		case "--system-context", "--env":
+			result.Action = "system-context"
 			return result
 		}
 	}
@@ -290,6 +294,7 @@ Configuration:
   ask --set-model <model>       Set default model (default: %s)
   ask --config                  Show current configuration file and settings
   ask --update-self, --update   Check for updates and update in-place
+  ask --system-context, --env   Show build-aware OS, shell, and elevation context
   ask --uninstall-self          Completely uninstall ask from the system
   ask --version, -v             Show version
   ask --help, -h                Show this help message
@@ -350,6 +355,13 @@ func Run(cmdArgs []string) {
 			ghostStatus = "Enabled (Trigger: Alt+RightArrow)"
 		}
 		fmt.Printf("Ghost Autocompletion: %s\n", ghostStatus)
+		sysCtx := GetActiveSystemContext()
+		elevated := isProcessElevated()
+		fmt.Printf("OS:      %s (%s, %s)\n", sysCtx.OSDistribution, sysCtx.OSBuild, sysCtx.Architecture)
+		fmt.Printf("Shell:   %s (Elevated: %v)\n", sysCtx.ShellVersion, elevated)
+		if len(sysCtx.PackageManagers) > 0 {
+			fmt.Printf("Package: %s\n", strings.Join(sysCtx.PackageManagers, ", "))
+		}
 		return
 	case "set-key":
 		if parsed.ActionArg == "" {
@@ -407,6 +419,15 @@ func Run(cmdArgs []string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		return
+	case "system-context":
+		sysCtx := GetActiveSystemContext()
+		elevated := isProcessElevated()
+		data, _ := json.MarshalIndent(sysCtx, "", "  ")
+		fmt.Println("=== Build-Aware System Context ===")
+		fmt.Println(string(data))
+		fmt.Printf("\nLive Process Elevation: %v\n", elevated)
+		fmt.Printf("\nPrompt Injection Format:\n%s\n", sysCtx.FormatPromptContext(elevated))
 		return
 	case "uninstall-self":
 		if err := RunUninstallSelf(); err != nil {
