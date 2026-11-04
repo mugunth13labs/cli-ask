@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	version = "0.5.0"
+	version = "0.6.0"
 )
 
 var codeFileExts = map[string]bool{
@@ -24,8 +24,8 @@ var codeFileExts = map[string]bool{
 }
 
 type ParsedArgs struct {
-	Action     string // "help", "version", "config", "clear", "set-key", "set-model", "update-self", "chatbot", "query"
-	ActionArg  string // value for --set-key or --set-model
+	Action     string // "help", "version", "config", "clear", "set-key", "set-model", "update-self", "chatbot", "complete", "toggle-ghost", "install-shell-ghost", "uninstall-shell-ghost", "query"
+	ActionArg  string // value for --set-key, --set-model, or --complete
 	OutputFile string // path for -o / --output
 	AppendFile string // path for -a / --append
 	CodeGen    bool   // pure code generation mode (--cg / --codegen)
@@ -64,10 +64,19 @@ func parseCLIArgs(args []string) ParsedArgs {
 		case "-i", "--chatbot":
 			result.Action = "chatbot"
 			return result
+		case "--toggle-ghost":
+			result.Action = "toggle-ghost"
+			return result
+		case "--install-shell-ghost":
+			result.Action = "install-shell-ghost"
+			return result
+		case "--uninstall-shell-ghost":
+			result.Action = "uninstall-shell-ghost"
+			return result
 		}
 	}
 
-	// 2. Check for parametric commands (--set-key / --set-model)
+	// 2. Check for parametric commands (--set-key / --set-model / --complete / --suggest)
 	if args[0] == "--set-key" {
 		result.Action = "set-key"
 		if len(args) > 1 {
@@ -79,6 +88,13 @@ func parseCLIArgs(args []string) ParsedArgs {
 		result.Action = "set-model"
 		if len(args) > 1 {
 			result.ActionArg = args[1]
+		}
+		return result
+	}
+	if args[0] == "--complete" || args[0] == "--suggest" {
+		result.Action = "complete"
+		if len(args) > 1 {
+			result.ActionArg = strings.Join(args[1:], " ")
 		}
 		return result
 	}
@@ -129,12 +145,15 @@ func parseCLIArgs(args []string) ParsedArgs {
 				}
 				continue
 			}
-
-			// First non-option argument encountered: subsequent flags belong to the user's prompt
-			flagsAllowed = false
+			if strings.HasPrefix(arg, "-") {
+				promptTokens = append(promptTokens, arg)
+				flagsAllowed = false
+				continue
+			}
 		}
 
 		promptTokens = append(promptTokens, arg)
+		flagsAllowed = false
 	}
 
 	result.Prompt = strings.Join(promptTokens, " ")
@@ -142,13 +161,16 @@ func parseCLIArgs(args []string) ParsedArgs {
 }
 
 func validateArgs(parsed *ParsedArgs) error {
+	if parsed.OutputFile != "" && parsed.AppendFile != "" {
+		return fmt.Errorf("cannot specify both --output (-o) and --append (-a)")
+	}
 	if parsed.Action == "chatbot" && (parsed.OutputFile != "" || parsed.AppendFile != "") {
-		return fmt.Errorf("interactive chatbot mode (-i/--chatbot) is incompatible with direct file output (-o/--output, -a/--append)")
+		return fmt.Errorf("file output flags (-o, -a) cannot be used with interactive chatbot mode")
 	}
 	return nil
 }
 
-func detectCodeGen(parsed *ParsedArgs, userPrompt string, stdinText string) bool {
+func detectCodeGen(parsed *ParsedArgs, userPrompt, stdinText string) bool {
 	if parsed.CodeGen {
 		return true
 	}
@@ -254,6 +276,12 @@ Session Memory:
   ask --clear, -c               Clear current terminal's conversation history
   ask --no-context <prompt>     Run query without reading or updating session history
 
+Shell Autocompletion:
+  ask --toggle-ghost            Toggle AI command completion in shell profile (Alt+RightArrow)
+  ask --install-shell-ghost     Install shell completion hook into profile
+  ask --uninstall-shell-ghost   Remove shell completion hook from profile
+  ask --complete <line>         Headless query for single-line command completion
+
 Configuration:
   ask --set-key <key>           Save OpenRouter API key
   ask --set-model <model>       Set default model (default: %s)
@@ -313,6 +341,11 @@ func Run(cmdArgs []string) {
 		fmt.Printf("Model:   %s\n", cfg.Model)
 		fmt.Printf("API Key: %s\n", maskedKey)
 		fmt.Printf("Session: %s\n", getSessionID())
+		ghostStatus := "Disabled (run: ask --toggle-ghost)"
+		if installed, _, _ := IsShellGhostInstalled(); installed {
+			ghostStatus = "Enabled (Trigger: Alt+RightArrow)"
+		}
+		fmt.Printf("Ghost Autocompletion: %s\n", ghostStatus)
 		return
 	case "set-key":
 		if parsed.ActionArg == "" {
@@ -348,6 +381,28 @@ func Run(cmdArgs []string) {
 			os.Exit(1)
 		}
 		fmt.Printf("Default model set to: %s\n", cfg.Model)
+		return
+	case "complete":
+		cfg, _ := loadConfig()
+		HandleGhostCompleteCLI(cfg, parsed.ActionArg)
+		return
+	case "toggle-ghost":
+		if err := ToggleShellGhost(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "install-shell-ghost":
+		if err := InstallShellGhost(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "uninstall-shell-ghost":
+		if err := UninstallShellGhost(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
