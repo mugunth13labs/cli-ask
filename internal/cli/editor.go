@@ -643,6 +643,9 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 					if strings.HasSuffix(cand, "/") {
 						// Onion peeling: directory selected
 						inserted := "@" + cand
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\""
+						}
 						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
 						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
 						auto.UpdateQuery(cand)
@@ -651,6 +654,9 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 					} else {
 						// File selected
 						inserted := "@" + cand + " "
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\" "
+						}
 						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
 						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
 						auto.Dismiss()

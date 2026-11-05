@@ -1241,6 +1241,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					if strings.HasSuffix(cand, "/") {
 						// Onion peeling: directory selected
 						inserted := "@" + cand
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\""
+						}
 						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
 						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.UpdateQuery(cand)
@@ -1249,6 +1252,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					} else {
 						// File selected
 						inserted := "@" + cand + " "
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\" "
+						}
 						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
 						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.Dismiss()
@@ -1305,6 +1311,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					if strings.HasSuffix(cand, "/") {
 						// Onion peeling: directory selected
 						inserted := "@" + cand
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\""
+						}
 						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
 						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.UpdateQuery(cand)
@@ -1312,6 +1321,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 						continue
 					} else {
 						inserted := "@" + cand + " "
+						if strings.Contains(cand, " ") {
+							inserted = "@\"" + cand + "\" "
+						}
 						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
 						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.Dismiss()

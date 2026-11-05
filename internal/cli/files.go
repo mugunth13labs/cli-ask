@@ -25,16 +25,16 @@ type FileAttachment struct {
 	Truncated bool   // Whether content exceeded 1MB
 }
 
-var fileRefPattern = regexp.MustCompile(`(?:^|[\s\(\[\{"'<,])@([a-zA-Z0-9_\-\.\/\\]+)`)
+var (
+	fileRefPattern      = regexp.MustCompile(`(?:^|[\s\(\[\{"'<,])@([a-zA-Z0-9_\-\.\/\\]+)`)
+	fileRefDoubleQuoted = regexp.MustCompile(`(?:^|[\s\(\[\{<,])@"((?:\\.|[^"\r\n])+)"`)
+	fileRefSingleQuoted = regexp.MustCompile(`(?:^|[\s\(\[\{<,])@'((?:\\.|[^'\r\n])+)'`)
+)
 
 // ExtractFileReferences parses a prompt and extracts unique @filename tokens.
+// It supports quoted paths (e.g. @"file with spaces.pdf") as well as unquoted paths.
 // It ignores emails (user@domain.com) and punctuation around the token.
 func ExtractFileReferences(prompt string) []string {
-	matches := fileRefPattern.FindAllStringSubmatch(prompt, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-
 	seen := make(map[string]bool)
 	var refs []string
 
@@ -43,6 +43,77 @@ func ExtractFileReferences(prompt string) []string {
 			r == ']' || r == '}' || r == '"' || r == '\'' || r == ';' || r == ':'
 	}
 
+	// 1. Quoted references: @"path with spaces" or @'path with spaces'
+	quotedMatches := append(
+		fileRefDoubleQuoted.FindAllStringSubmatch(prompt, -1),
+		fileRefSingleQuoted.FindAllStringSubmatch(prompt, -1)...,
+	)
+	for _, m := range quotedMatches {
+		if len(m) >= 2 {
+			raw := strings.TrimRightFunc(m[1], trailingTrim)
+			if raw == "" {
+				continue
+			}
+			raw = filepath.ToSlash(raw)
+			if !seen[raw] {
+				seen[raw] = true
+				refs = append(refs, raw)
+			}
+		}
+	}
+
+	// 2. Unquoted references that may contain spaces if existing on disk
+	cwd, _ := os.Getwd()
+	runes := []rune(prompt)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '@' {
+			continue
+		}
+		// Skip email addresses: preceding char is alphanumeric
+		if i > 0 && (unicode.IsLetter(runes[i-1]) || unicode.IsDigit(runes[i-1])) {
+			continue
+		}
+		// Skip quoted references already processed
+		if i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '\'' || runes[i+1] == '`') {
+			continue
+		}
+
+		// Look ahead for potential multi-word path
+		after := string(runes[i+1:])
+		if idx := strings.IndexAny(after, "\r\n"); idx != -1 {
+			after = after[:idx]
+		}
+
+		matchedPath := ""
+		if cwd != "" && after != "" {
+			words := strings.Fields(after)
+			for k := len(words); k >= 1; k-- {
+				cand := strings.Join(words[:k], " ")
+				candClean := strings.TrimRightFunc(cand, trailingTrim)
+				if candClean == "" {
+					continue
+				}
+				candPath := filepath.FromSlash(candClean)
+				if !filepath.IsAbs(candPath) {
+					candPath = filepath.Join(cwd, candPath)
+				}
+				if info, err := os.Stat(candPath); err == nil && !info.IsDir() {
+					matchedPath = filepath.ToSlash(candClean)
+					break
+				}
+			}
+		}
+
+		if matchedPath != "" {
+			if !seen[matchedPath] {
+				seen[matchedPath] = true
+				refs = append(refs, matchedPath)
+			}
+		}
+	}
+
+	// 3. Standard unquoted single tokens
+	matches := fileRefPattern.FindAllStringSubmatch(prompt, -1)
 	for _, m := range matches {
 		if len(m) < 2 {
 			continue
@@ -51,9 +122,15 @@ func ExtractFileReferences(prompt string) []string {
 		if raw == "" {
 			continue
 		}
-		// Normalize separators
 		raw = filepath.ToSlash(raw)
-		if !seen[raw] {
+		alreadyCovered := false
+		for existing := range seen {
+			if strings.HasPrefix(existing, raw) {
+				alreadyCovered = true
+				break
+			}
+		}
+		if !alreadyCovered && !seen[raw] {
 			seen[raw] = true
 			refs = append(refs, raw)
 		}
@@ -161,11 +238,23 @@ func FormatHistoryPrompt(originalPrompt string, attachments []FileAttachment) st
 	result := originalPrompt
 	for _, att := range attachments {
 		if att.Truncated {
-			// Replace @ref with @ref [truncated]
-			target := "@" + att.Ref
 			replacement := "@" + att.Ref + " [truncated]"
-			if !strings.Contains(result, replacement) {
-				result = strings.Replace(result, target, replacement, 1)
+			targets := []string{
+				"@\"" + att.Ref + "\"",
+				"@'" + att.Ref + "'",
+				"@`" + att.Ref + "`",
+				"@" + att.Ref,
+			}
+			replaced := false
+			for _, target := range targets {
+				if strings.Contains(result, target) {
+					result = strings.Replace(result, target, replacement, 1)
+					replaced = true
+					break
+				}
+			}
+			if !replaced && !strings.Contains(result, replacement) {
+				result = strings.Replace(result, "@"+att.Ref, replacement, 1)
 			}
 		}
 	}

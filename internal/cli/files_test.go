@@ -39,6 +39,11 @@ func TestExtractFileReferences(t *testing.T) {
 			expected: []string{"main.go"},
 		},
 		{
+			name:     "quoted file with spaces",
+			prompt:   `please read @"Downloads/4050materials/Week09b-Matrix-Matrix Multiplication.pdf" and explain`,
+			expected: []string{"Downloads/4050materials/Week09b-Matrix-Matrix Multiplication.pdf"},
+		},
+		{
 			name:     "no references",
 			prompt:   "how do I sort an array in Go?",
 			expected: nil,
@@ -57,6 +62,25 @@ func TestExtractFileReferences(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExtractFileReferencesWithSpacesOnDisk(t *testing.T) {
+	tempDir := t.TempDir()
+	origWd, _ := os.Getwd()
+	_ = os.Chdir(tempDir)
+	defer func() { _ = os.Chdir(origWd) }()
+
+	dir := filepath.Join("Downloads", "4050materials")
+	_ = os.MkdirAll(dir, 0755)
+	filePath := filepath.Join(dir, "Week09b-Matrix-Matrix Multiplication.pdf")
+	_ = os.WriteFile(filePath, []byte("matrix content"), 0644)
+
+	prompt := "@Downloads/4050materials/Week09b-Matrix-Matrix Multiplication.pdf what does it say?"
+	refs := ExtractFileReferences(prompt)
+	expected := "Downloads/4050materials/Week09b-Matrix-Matrix Multiplication.pdf"
+	if len(refs) != 1 || refs[0] != expected {
+		t.Fatalf("expected [%s], got %v", expected, refs)
 	}
 }
 

@@ -1,3 +1,9 @@
+cli-ask (0.7.2-1) unstable; urgency=medium
+
+  * Bug fixes and performance improvements.
+
+ -- Mugunthan Mohan <mugunthan13labs@gmail.com>  Fri, 06 Nov 2026 00:45:00 +0800
+
 cli-ask (0.7.1-1) unstable; urgency=medium
 
   * Interactive clipboard confirmation indicator in chat and prompt composer.
