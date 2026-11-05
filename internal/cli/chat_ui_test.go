@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -284,7 +286,7 @@ func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Alt+→") || !strings.Contains(header, "/help /clear /model /exit") {
+	if !strings.Contains(header, "Alt+→") || !strings.Contains(header, "/help /clear /exit") {
 		t.Fatalf("expected header to contain slash command hints, got: %q", header)
 	}
 
@@ -332,7 +334,7 @@ func TestDividerLineQuietInPromptAndKeybindingInHistory(t *testing.T) {
 	}
 }
 
-func TestSlashCommandHelpAndModel(t *testing.T) {
+func TestSlashCommandHelpAndClear(t *testing.T) {
 	t.Setenv("ASK_CONFIG_DIR", t.TempDir())
 	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
 	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 60, 15)
@@ -344,39 +346,11 @@ func TestSlashCommandHelpAndModel(t *testing.T) {
 		t.Fatalf("expected user and assistant turns after /help, got: %d", len(chat.Turns))
 	}
 	helpTurn := chat.Turns[len(chat.Turns)-1]
-	if !strings.Contains(helpTurn.Content, "/model <name>") || !strings.Contains(helpTurn.Content, "/clear") {
+	if !strings.Contains(helpTurn.Content, "/clear") || !strings.Contains(helpTurn.Content, "/exit") {
 		t.Fatalf("unexpected help turn content: %q", helpTurn.Content)
 	}
-
-	// Test /model validation:
-	modelsCacheMu.Lock()
-	modelsCache = map[string]bool{
-		"nvidia/nemotron-3.5-lightning:free": true,
-	}
-	modelsCacheAt = time.Now()
-	modelsCacheMu.Unlock()
-
-	// 1. Invalid model -> rejected and keeps previous model!
-	chat.Config.Model = "gpt-4"
-	chat.PromptLines = []string{"/model some-rando-name"}
-	chat.submitPrompt()
-	if chat.Config.Model != "gpt-4" {
-		t.Fatalf("expected model to remain gpt-4 after invalid model switch, got: %s", chat.Config.Model)
-	}
-	errTurn := chat.Turns[len(chat.Turns)-1]
-	if !strings.Contains(errTurn.Content, "not found on OpenRouter") || !strings.Contains(errTurn.Content, "Keeping previous model: gpt-4") {
-		t.Fatalf("unexpected error turn content for invalid model: %q", errTurn.Content)
-	}
-
-	// 2. Valid model -> successfully switched!
-	chat.PromptLines = []string{"/model nvidia/nemotron-3.5-lightning:free"}
-	chat.submitPrompt()
-	if chat.Config.Model != "nvidia/nemotron-3.5-lightning:free" {
-		t.Fatalf("expected model to switch to nvidia/nemotron-3.5-lightning:free, got: %s", chat.Config.Model)
-	}
-	modelTurn := chat.Turns[len(chat.Turns)-1]
-	if !strings.Contains(modelTurn.Content, "Model switched to: nvidia/nemotron-3.5-lightning:free") {
-		t.Fatalf("unexpected model turn content: %q", modelTurn.Content)
+	if strings.Contains(helpTurn.Content, "/model") {
+		t.Fatalf("/model should not be listed in help turn content: %q", helpTurn.Content)
 	}
 }
 
@@ -617,5 +591,105 @@ func TestChatUIWordNavigation(t *testing.T) {
 	chat.HandleKey([]byte("\x1b[1;5D"))
 	if chat.PromptCol != 0 { // start of "alpha"
 		t.Fatalf("expected PromptCol=0 after second word jump left, got %d", chat.PromptCol)
+	}
+}
+
+func TestClipboardConfirmationIndicator(t *testing.T) {
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 60, 15)
+	chat.Turns = append(chat.Turns, ChatTurn{Role: "assistant", Content: "line to copy"})
+	chat.rebuildReversedLines()
+
+	chat.ActiveRegion = RegionHistory
+	chat.Selecting = true
+	chat.SelStartR = 1
+	chat.SelStartC = 0
+	chat.SelEndR = 1
+	chat.SelEndC = 11
+
+	// Press 'y' to copy
+	chat.HandleKey([]byte("y"))
+
+	dividerRow := chat.PromptVisibleLines()
+	rendered := chat.RenderRow(dividerRow)
+	if !strings.Contains(rendered, "[Copied to clipboard]") {
+		t.Fatalf("expected divider row to display '[Copied to clipboard]', got: %q", rendered)
+	}
+}
+
+func TestSlashCommandInteractiveDropdownAndDispatch(t *testing.T) {
+	t.Setenv("ASK_CONFIG_DIR", t.TempDir())
+	cfg := &Config{Model: "gpt-4", APIKey: "test-key"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 60, 15)
+
+	// 1. Typing '/' at line start activates slash dropdown
+	chat.HandleKey([]byte("/"))
+	if !chat.Auto.Active || chat.Auto.Mode != AutocompleteModeSlash {
+		t.Fatalf("expected slash autocomplete active, got: active=%v mode=%v", chat.Auto.Active, chat.Auto.Mode)
+	}
+
+	// 2. Typing 'h' filters to /help
+	chat.HandleKey([]byte("h"))
+	if len(chat.Auto.Candidates) != 1 || chat.Auto.Candidates[0] != "/help" {
+		t.Fatalf("expected candidate '/help', got %v", chat.Auto.Candidates)
+	}
+
+	// 3. Pressing Enter dispatches the slash command immediately
+	chat.HandleKey([]byte{13})
+	if chat.Auto.Active {
+		t.Fatal("expected autocomplete to be dismissed after Enter")
+	}
+	if len(chat.Turns) < 2 {
+		t.Fatalf("expected user and assistant turns after /help dispatch, got %d turns", len(chat.Turns))
+	}
+	if !strings.Contains(chat.Turns[len(chat.Turns)-1].Content, "ask chat commands:") {
+		t.Fatalf("expected /help response, got: %q", chat.Turns[len(chat.Turns)-1].Content)
+	}
+}
+
+func TestOnionPeelingDirectoryTraversalInChatUI(t *testing.T) {
+	tempDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tempDir, "src", "core"), 0755)
+	_ = os.WriteFile(filepath.Join(tempDir, "root.go"), []byte("package root"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "src", "app.go"), []byte("package app"), 0644)
+
+	cfg := &Config{Model: "gpt-4"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
+	chat.Auto.Cwd = tempDir
+
+	// 1. Type '@' -> lists root entries [root.go, src/]
+	chat.HandleKey([]byte("@"))
+	if !chat.Auto.Active {
+		t.Fatal("expected active autocomplete")
+	}
+
+	// 2. Filter to 'src/'
+	chat.HandleKey([]byte("s"))
+	chat.HandleKey([]byte("r"))
+	chat.HandleKey([]byte("c"))
+	if chat.Auto.SelectedCandidate() != "src/" {
+		t.Fatalf("expected selected candidate 'src/', got %q", chat.Auto.SelectedCandidate())
+	}
+
+	// 3. Tab on directory: peels onion! Inserts @src/, stays active, lists src/ entries
+	chat.HandleKey([]byte{9}) // Tab
+	if !chat.Auto.Active {
+		t.Fatal("expected autocomplete to remain active when directory is selected (onion-peeling)")
+	}
+	if chat.PromptLines[0] != "@src/" {
+		t.Fatalf("expected prompt to be '@src/', got %q", chat.PromptLines[0])
+	}
+	if len(chat.Auto.Candidates) != 2 || chat.Auto.Candidates[0] != "src/app.go" || chat.Auto.Candidates[1] != "src/core/" {
+		t.Fatalf("expected entries inside src/ [src/app.go src/core/], got %v", chat.Auto.Candidates)
+	}
+
+	// 4. Select file 'src/app.go' with Tab: completes with trailing space and closes
+	chat.HandleKey([]byte{9}) // Tab
+	if chat.Auto.Active {
+		t.Fatal("expected autocomplete to close when file is selected")
+	}
+	expected := "@src/app.go "
+	if chat.PromptLines[0] != expected {
+		t.Fatalf("expected prompt %q, got %q", expected, chat.PromptLines[0])
 	}
 }

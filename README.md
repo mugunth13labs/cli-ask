@@ -124,10 +124,10 @@ $ ask -i
   - `Shift+Arrows` — Highlight text in history
   - `y`, `Enter`, or `Ctrl+Shift+C` — Copy selection to clipboard
 - **In-Chat Commands**:
-  - `/model <name>` — Switch AI model (e.g. `/model anthropic/claude-3.5-sonnet`)
   - `/clear` — Reset conversation history
   - `/help` — View commands
   - `/exit` or `Ctrl+C` — Exit back to shell
+  - *(To change the AI model, use `ask --set-model <name>`)*
 
 ### 5. Code Generation
 Generate raw, executable scripts or configurations:

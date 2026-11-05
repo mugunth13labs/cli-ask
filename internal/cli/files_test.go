@@ -229,3 +229,115 @@ func TestAutocompleteStateLifecycle(t *testing.T) {
 		t.Errorf("expected dismissed")
 	}
 }
+
+func TestReadDirSingleLevel(t *testing.T) {
+	tempDir := t.TempDir()
+
+	_ = os.MkdirAll(filepath.Join(tempDir, "src", "sub"), 0755)
+	_ = os.MkdirAll(filepath.Join(tempDir, ".git"), 0755)
+	_ = os.MkdirAll(filepath.Join(tempDir, ".hidden"), 0755)
+
+	_ = os.WriteFile(filepath.Join(tempDir, "main.go"), []byte("package main"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "src", "app.go"), []byte("package app"), 0644)
+
+	// Level 1: root
+	entries, err := ReadDirSingleLevel(tempDir, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedRoot := []string{"main.go", "src/"}
+	if len(entries) != len(expectedRoot) {
+		t.Fatalf("expected entries %v, got %v", expectedRoot, entries)
+	}
+	for i := range expectedRoot {
+		if entries[i] != expectedRoot[i] {
+			t.Errorf("at index %d: expected %q, got %q", i, expectedRoot[i], entries[i])
+		}
+	}
+
+	// Level 2: inside src
+	srcEntries, err := ReadDirSingleLevel(tempDir, "src")
+	if err != nil {
+		t.Fatalf("unexpected error reading src: %v", err)
+	}
+	expectedSrc := []string{"src/app.go", "src/sub/"}
+	if len(srcEntries) != len(expectedSrc) {
+		t.Fatalf("expected src entries %v, got %v", expectedSrc, srcEntries)
+	}
+	for i := range expectedSrc {
+		if srcEntries[i] != expectedSrc[i] {
+			t.Errorf("at index %d: expected %q, got %q", i, expectedSrc[i], srcEntries[i])
+		}
+	}
+}
+
+func TestProgressiveOnionPeeling(t *testing.T) {
+	tempDir := t.TempDir()
+
+	_ = os.MkdirAll(filepath.Join(tempDir, "pkg", "util"), 0755)
+	_ = os.WriteFile(filepath.Join(tempDir, "root.go"), []byte("package root"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "pkg", "pkg.go"), []byte("package pkg"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "pkg", "util", "helper.go"), []byte("package util"), 0644)
+
+	auto := NewAutocomplete()
+	auto.Cwd = tempDir
+
+	// Trigger: lists immediate root entries only
+	auto.Trigger(0, 0)
+	if !auto.Active {
+		t.Fatal("expected auto to be active")
+	}
+	if len(auto.Candidates) != 2 || auto.Candidates[0] != "pkg/" || auto.Candidates[1] != "root.go" {
+		t.Fatalf("expected immediate root entries [pkg/ root.go], got %v", auto.Candidates)
+	}
+
+	// Enter directory 'pkg/'
+	auto.UpdateQuery("pkg/")
+	if len(auto.Candidates) != 2 || auto.Candidates[0] != "pkg/pkg.go" || auto.Candidates[1] != "pkg/util/" {
+		t.Fatalf("expected immediate pkg/ entries, got %v", auto.Candidates)
+	}
+
+	// Filter inside 'pkg/'
+	auto.UpdateQuery("pkg/ut")
+	if len(auto.Candidates) != 1 || auto.Candidates[0] != "pkg/util/" {
+		t.Fatalf("expected only pkg/util/ to match, got %v", auto.Candidates)
+	}
+
+	// Enter 'pkg/util/'
+	auto.UpdateQuery("pkg/util/")
+	if len(auto.Candidates) != 1 || auto.Candidates[0] != "pkg/util/helper.go" {
+		t.Fatalf("expected pkg/util/helper.go, got %v", auto.Candidates)
+	}
+}
+
+func TestSlashCommandDropdownAutocomplete(t *testing.T) {
+	auto := NewAutocomplete()
+	auto.TriggerSlash(0, 0)
+
+	if !auto.Active || auto.Mode != AutocompleteModeSlash {
+		t.Fatalf("expected active slash autocomplete, got active=%v mode=%v", auto.Active, auto.Mode)
+	}
+
+	if len(auto.Candidates) != 3 {
+		t.Fatalf("expected 3 standard slash commands (/help, /clear, /exit), got %d (%v)", len(auto.Candidates), auto.Candidates)
+	}
+
+	// Filter query: 'h' -> matches /help
+	auto.UpdateQuery("h")
+	if len(auto.Candidates) != 1 || auto.Candidates[0] != "/help" {
+		t.Fatalf("expected '/help' to match 'h', got %v", auto.Candidates)
+	}
+
+	// Formatting dropdown
+	lines := FormatDropdownLines(auto, 60)
+	if len(lines) == 0 {
+		t.Fatal("expected dropdown lines for slash command")
+	}
+	if !strings.Contains(lines[0], "commands (1/1)") {
+		t.Errorf("expected commands count header in %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "/help") {
+		t.Errorf("expected /help in %s", lines[1])
+	}
+}

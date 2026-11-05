@@ -6,6 +6,7 @@
 *.dylib
 dist/
 ask
+ask-test
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,6 +18,9 @@ ask
 .config/
 *.key
 *.env
+
+# Local agent dev rules
+AGENTS.md
 
 # OS Files
 .DS_Store

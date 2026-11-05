@@ -21,8 +21,7 @@ func isChatCommand(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	if lower == "/exit" || lower == "/quit" || lower == "/q" ||
 		lower == "/clear" || lower == "/c" ||
-		lower == "/help" || lower == "/?" ||
-		strings.HasPrefix(lower, "/model") {
+		lower == "/help" || lower == "/?" {
 		return true
 	}
 	return false
@@ -155,7 +154,7 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		hints = "↑/↓: Browse | Shift+Arrows: Select | ↑: Prompt "
 	} else {
 		// In Prompt composer
-		hints = "Alt+→: Send | /help /clear /model /exit | Ctrl+C: Exit "
+		hints = "Alt+→: Send | /help /clear /exit | Ctrl+C: Exit "
 		if width < 85 {
 			hints = "Alt+→: Send | / commands | Ctrl+C: Exit "
 		}
@@ -574,21 +573,9 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 			continue
 		}
 
-		if strings.HasPrefix(lower, "/model") {
-			parts := strings.Fields(input)
-			if len(parts) > 1 {
-				cfg.Model = parts[1]
-				fmt.Printf("Switched model to: %s\n\n", cfg.Model)
-			} else {
-				fmt.Printf("Current model: %s\n\n", cfg.Model)
-			}
-			continue
-		}
-
 		if lower == "/help" || lower == "/?" {
 			fmt.Println(`Chat Mode Commands:
   /clear, /c        Clear conversation memory for this session
-  /model <name>     Switch active model for this session
   /help             Show this help message
   /exit, /quit, /q  Exit chat mode`)
 			fmt.Println()

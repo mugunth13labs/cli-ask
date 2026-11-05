@@ -232,42 +232,150 @@ func IsPathDelimiter(r rune) bool {
 	return unicode.IsSpace(r) || r == '\n' || r == '\r' || r == '\t' || r == '"' || r == '\'' || r == '`'
 }
 
-// AutocompleteState manages active file autocomplete state in prompt composers.
+// AutocompleteMode represents whether the active completion is for files or slash commands.
+type AutocompleteMode int
+
+const (
+	AutocompleteModeFiles AutocompleteMode = iota
+	AutocompleteModeSlash
+)
+
+// SlashCommandItem defines a slash command and its descriptive label in the dropdown menu.
+type SlashCommandItem struct {
+	Name        string
+	Description string
+}
+
+// DefaultSlashCommands lists the standard interactive chatbot slash commands.
+var DefaultSlashCommands = []SlashCommandItem{
+	{Name: "/help", Description: "Show available commands & keys"},
+	{Name: "/clear", Description: "Clear conversation history"},
+	{Name: "/exit", Description: "Exit interactive chat session"},
+}
+
+func getSlashCommandDesc(name string) string {
+	for _, item := range DefaultSlashCommands {
+		if item.Name == name {
+			return item.Description
+		}
+	}
+	return ""
+}
+
+// ReadDirSingleLevel reads immediate entries inside relDir relative to cwd.
+// Directories are returned with a trailing slash "/".
+// Hidden entries and .git directories are skipped.
+func ReadDirSingleLevel(cwd, relDir string) ([]string, error) {
+	targetDir := cwd
+	if relDir != "" && relDir != "." {
+		targetDir = filepath.Join(cwd, filepath.FromSlash(relDir))
+	}
+
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == ".git" || (strings.HasPrefix(name, ".") && name != "." && name != "..") {
+			continue
+		}
+
+		entryPath := name
+		if relDir != "" && relDir != "." {
+			entryPath = filepath.ToSlash(filepath.Join(relDir, name))
+		}
+
+		if entry.IsDir() {
+			entryPath += "/"
+		}
+		results = append(results, filepath.ToSlash(entryPath))
+	}
+	sort.Strings(results)
+	return results, nil
+}
+
+// AutocompleteState manages active file and slash command autocomplete state in prompt composers.
 type AutocompleteState struct {
 	Active        bool
+	Mode          AutocompleteMode
 	TriggerCol    int
 	TriggerRow    int
 	Query         string
-	AllFiles      []string
+	AllFiles      []string // Pre-seeded file list (e.g. for unit tests)
+	DirCache      map[string][]string
 	Candidates    []string
 	SelectedIndex int
+	Cwd           string
 }
 
 // NewAutocomplete returns an initialized AutocompleteState.
 func NewAutocomplete() *AutocompleteState {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	return &AutocompleteState{
-		Active: false,
+		Active:   false,
+		Mode:     AutocompleteModeFiles,
+		DirCache: make(map[string][]string),
+		Cwd:      cwd,
 	}
 }
 
-// Trigger activates the autocomplete menu at the specified cursor position.
+// Trigger activates the file autocomplete menu at the specified cursor position.
 func (a *AutocompleteState) Trigger(row, col int) {
-	if len(a.AllFiles) == 0 {
-		cwd, err := os.Getwd()
-		if err != nil {
-			cwd = "."
-		}
-		files, err := ScanWorkspaceFiles(cwd)
-		if err == nil {
-			a.AllFiles = files
-		}
-	}
 	a.Active = true
+	a.Mode = AutocompleteModeFiles
 	a.TriggerRow = row
 	a.TriggerCol = col
 	a.Query = ""
-	a.Candidates = a.AllFiles
 	a.SelectedIndex = 0
+
+	if len(a.AllFiles) > 0 {
+		a.Candidates = a.AllFiles
+		return
+	}
+
+	// Single-level onion peeling: read immediate directory entries of Cwd
+	if a.Cwd == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			a.Cwd = cwd
+		} else {
+			a.Cwd = "."
+		}
+	}
+	if a.DirCache == nil {
+		a.DirCache = make(map[string][]string)
+	}
+
+	entries, ok := a.DirCache["."]
+	if !ok {
+		var err error
+		entries, err = ReadDirSingleLevel(a.Cwd, "")
+		if err == nil {
+			a.DirCache["."] = entries
+		}
+	}
+	a.Candidates = entries
+}
+
+// TriggerSlash activates the slash command autocomplete menu at the specified cursor position.
+func (a *AutocompleteState) TriggerSlash(row, col int) {
+	a.Active = true
+	a.Mode = AutocompleteModeSlash
+	a.TriggerRow = row
+	a.TriggerCol = col
+	a.Query = ""
+	a.SelectedIndex = 0
+
+	var cands []string
+	for _, item := range DefaultSlashCommands {
+		cands = append(cands, item.Name)
+	}
+	a.Candidates = cands
 }
 
 // Dismiss closes the autocomplete menu.
@@ -281,7 +389,81 @@ func (a *AutocompleteState) Dismiss() {
 // UpdateQuery filters candidates by search query.
 func (a *AutocompleteState) UpdateQuery(q string) {
 	a.Query = q
-	a.Candidates = FilterFileCandidates(a.AllFiles, q)
+
+	if a.Mode == AutocompleteModeSlash {
+		qNorm := strings.ToLower(strings.TrimPrefix(q, "/"))
+		var filtered []string
+		for _, item := range DefaultSlashCommands {
+			nameNoSlash := strings.TrimPrefix(item.Name, "/")
+			if strings.HasPrefix(nameNoSlash, qNorm) || strings.Contains(nameNoSlash, qNorm) {
+				filtered = append(filtered, item.Name)
+			}
+		}
+		a.Candidates = filtered
+		if a.SelectedIndex >= len(a.Candidates) {
+			a.SelectedIndex = 0
+		}
+		return
+	}
+
+	// File mode: Pre-seeded list (backward compatibility for tests)
+	if len(a.AllFiles) > 0 {
+		a.Candidates = FilterFileCandidates(a.AllFiles, q)
+		if a.SelectedIndex >= len(a.Candidates) {
+			a.SelectedIndex = 0
+		}
+		return
+	}
+
+	// Progressive single-level directory peeling
+	if a.Cwd == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			a.Cwd = cwd
+		} else {
+			a.Cwd = "."
+		}
+	}
+	if a.DirCache == nil {
+		a.DirCache = make(map[string][]string)
+	}
+
+	cleanQ := filepath.ToSlash(q)
+	lastSlash := strings.LastIndex(cleanQ, "/")
+	relDir := "."
+	filterPrefix := cleanQ
+	if lastSlash >= 0 {
+		relDir = cleanQ[:lastSlash]
+		filterPrefix = cleanQ[lastSlash+1:]
+	}
+
+	entries, ok := a.DirCache[relDir]
+	if !ok {
+		var err error
+		entries, err = ReadDirSingleLevel(a.Cwd, relDir)
+		if err == nil {
+			a.DirCache[relDir] = entries
+		}
+	}
+
+	if filterPrefix == "" {
+		a.Candidates = entries
+	} else {
+		lowerFilter := strings.ToLower(filterPrefix)
+		var exactPrefix []string
+		var contains []string
+		for _, entry := range entries {
+			baseName := filepath.Base(filepath.FromSlash(strings.TrimSuffix(entry, "/")))
+			lowerBase := strings.ToLower(baseName)
+			lowerEntry := strings.ToLower(entry)
+			if strings.HasPrefix(lowerBase, lowerFilter) || strings.HasPrefix(lowerEntry, strings.ToLower(cleanQ)) {
+				exactPrefix = append(exactPrefix, entry)
+			} else if strings.Contains(lowerBase, lowerFilter) || strings.Contains(lowerEntry, strings.ToLower(cleanQ)) {
+				contains = append(contains, entry)
+			}
+		}
+		a.Candidates = append(exactPrefix, contains...)
+	}
+
 	if a.SelectedIndex >= len(a.Candidates) {
 		a.SelectedIndex = 0
 	}
@@ -348,8 +530,13 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 
 	var res []string
 
-	// Header: ┌─ files (X/Y) ───┐
-	headerTitle := fmt.Sprintf("┌─ files (%d/%d) ", auto.SelectedIndex+1, total)
+	titleKind := "files"
+	if auto.Mode == AutocompleteModeSlash {
+		titleKind = "commands"
+	}
+
+	// Header: ┌─ files (X/Y) ───┐ or ┌─ commands (X/Y) ───┐
+	headerTitle := fmt.Sprintf("┌─ %s (%d/%d) ", titleKind, auto.SelectedIndex+1, total)
 	hRunes := utf8RuneCount(headerTitle)
 	dashes := ""
 	if hRunes < w-1 {
@@ -359,12 +546,28 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 
 	for i := start; i < end; i++ {
 		cand := auto.Candidates[i]
-		candRunes := []rune(cand)
+		desc := ""
+		if auto.Mode == AutocompleteModeSlash {
+			desc = getSlashCommandDesc(cand)
+		}
+
+		display := cand
+		if desc != "" && innerW > 35 {
+			maxCand := 10
+			if len([]rune(cand)) < maxCand {
+				candPad := strings.Repeat(" ", maxCand-len([]rune(cand)))
+				display = cand + candPad + " " + desc
+			} else {
+				display = cand + " " + desc
+			}
+		}
+
+		candRunes := []rune(display)
 		maxCandW := innerW - 3 // leave room for ' > ' or '   '
 		if len(candRunes) > maxCandW {
-			cand = "..." + string(candRunes[len(candRunes)-(maxCandW-3):])
+			display = string(candRunes[:maxCandW-3]) + "..."
 		}
-		candRunes = []rune(cand)
+		candRunes = []rune(display)
 		pad := ""
 		if len(candRunes) < maxCandW {
 			pad = strings.Repeat(" ", maxCandW-len(candRunes))
@@ -372,11 +575,11 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 
 		if i == auto.SelectedIndex {
 			// Amber highlighted item with navy background
-			row := fmt.Sprintf("%s│%s%s > %s%s %s%s│%s", cyan, reset, navyBg+amber+"\x1b[1m", cand, pad, reset, cyan, reset)
+			row := fmt.Sprintf("%s│%s%s > %s%s %s%s│%s", cyan, reset, navyBg+amber+"\x1b[1m", display, pad, reset, cyan, reset)
 			res = append(res, row)
 		} else {
 			// Bright white item with navy background
-			row := fmt.Sprintf("%s│%s%s   %s%s %s%s│%s", cyan, reset, navyBg+white, cand, pad, reset, cyan, reset)
+			row := fmt.Sprintf("%s│%s%s   %s%s %s%s│%s", cyan, reset, navyBg+white, display, pad, reset, cyan, reset)
 			res = append(res, row)
 		}
 	}

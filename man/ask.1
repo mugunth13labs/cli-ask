@@ -1,4 +1,4 @@
-.TH ASK 1 "November 2026" "cli-ask 0.7.0" "User Commands"
+.TH ASK 1 "November 2026" "cli-ask 0.7.1" "User Commands"
 .SH NAME
 ask \- lean terminal AI assistant with session-scoped context, inline prompt composer, code generation, and interactive chat
 .SH SYNOPSIS
@@ -35,7 +35,7 @@ Unlike bloated TUI-based AI assistants, \fBask\fR acts as a native Unix filter: 
 .PP
 When invoked with no prompt arguments in an interactive terminal, \fBask\fR opens an inline multiline prompt composer directly within your active shell. Inside the composer, you can freely type or paste multiline text, edit lines using cross-line Backspace and Arrow keys, navigate words with \fBCtrl+Right/Left\fR, and insert blank lines without premature execution. The composer features an automatic sliding viewport (clamped to 5 lines maximum) to ensure your terminal output remains visible. Upon pressing \fBAlt+RightArrow\fR (or \fBCtrl+S\fR / \fBCtrl+Enter\fR), the composer closes, records your prompt into the terminal scrollback history, and streams the AI response to stdout. Pressing \fBCtrl+C\fR cancels and exits cleanly.
 .PP
-When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous chat session. It supports multi-turn memory, mouse drag text selection, visual clipboard copying, on-the-fly model validation (\fB/model <name>\fR), and in-chat slash commands (\fB/clear\fR, \fB/model\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR). Exiting via \fB/exit\fR or \fBCtrl+C\fR cleanly restores your terminal screen and disables mouse tracking. Words without a leading slash are treated strictly as literal prompt text.
+When invoked with \fB--chatbot\fR or \fB-i\fR, \fBask\fR launches an interactive continuous chat session. It supports multi-turn memory, mouse drag text selection, visual clipboard copying, and in-chat slash commands (\fB/clear\fR, \fB/help\fR, \fB/exit\fR, \fB/q\fR). Exiting via \fB/exit\fR or \fBCtrl+C\fR cleanly restores your terminal screen and disables mouse tracking. Words without a leading slash are treated strictly as literal prompt text. (To configure the AI model, use \fBask --set-model <MODEL_NAME>\fR).
 .PP
 When invoked with \fB--cg\fR or \fB--codegen\fR, or when outputting to recognized code/script file extensions (\fI.sh\fR, \fI.py\fR, \fI.go\fR, \fI.rs\fR, \fI.yaml\fR, \fI.json\fR, etc.) or piping scripts, \fBask\fR automatically activates pure code generation mode. In this mode, conversational filler, markdown code fences, and title headers are strictly suppressed, producing 100% syntactically valid and runnable code starting directly from the first character or shebang.
 .PP
@@ -89,9 +89,6 @@ Within interactive chatbot mode (\fBask -i\fR), the following commands and short
 .TP
 .BR /clear ", " /c
 Clear conversation memory and reset session context.
-.TP
-.BR /model " [" \fIMODEL\fR "]"
-Switch the active model for the chat session, or display current model if no argument is given. Entered model names are dynamically validated against OpenRouter models before switching; invalid names are rejected and the previous model is retained.
 .TP
 .B /help
 Display available chatbot commands.

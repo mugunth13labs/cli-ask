@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -25,11 +26,13 @@ const (
 )
 
 type MicroEditor struct {
-	Lines     []string
-	CursorRow int
-	CursorCol int
-	Title     string
-	Subtitle  string
+	Lines        []string
+	CursorRow    int
+	CursorCol    int
+	Title        string
+	Subtitle     string
+	ToastMessage string
+	ToastTime    time.Time
 }
 
 func NewMicroEditor(title, subtitle string) *MicroEditor {
@@ -381,7 +384,9 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 
 	// Top border with scroll up indicator if scrolled down
 	header := "─ ask prompt [ Alt+→: Send | Ctrl+C: Cancel ] "
-	if scrollOffset > 0 {
+	if editor != nil && editor.ToastMessage != "" && time.Now().Before(editor.ToastTime) {
+		header = fmt.Sprintf("─ ask prompt \x1b[38;5;46m%s\x1b[38;5;39m [ Alt+→: Send | Ctrl+C: Cancel ] ", editor.ToastMessage)
+	} else if scrollOffset > 0 {
 		if targetDesc != "" {
 			header = fmt.Sprintf("─ ask prompt [ Target: %s | ▲ %d above | Alt+→: Send | Ctrl+C: Cancel ] ", targetDesc, scrollOffset)
 		} else {
@@ -611,9 +616,47 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 					if editor.CursorCol < len(lineRunes) {
 						suffix = string(lineRunes[editor.CursorCol:])
 					}
-					inserted := "@" + cand + " "
-					editor.Lines[editor.CursorRow] = prefix + inserted + suffix
-					editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
+
+					if auto.Mode == AutocompleteModeSlash {
+						if buf[0] == 13 || (n == 1 && buf[0] == 10) {
+							// Enter on slash command: dispatch immediately
+							editor.Lines[editor.CursorRow] = cand
+							editor.CursorCol = len([]rune(cand))
+							auto.Dismiss()
+							clearBox()
+							lower := strings.ToLower(cand)
+							if lower == "/exit" || lower == "/quit" || lower == "/q" {
+								return "", true, nil
+							}
+							return cand, false, nil
+						} else {
+							// Tab: complete command name
+							inserted := cand + " "
+							editor.Lines[editor.CursorRow] = prefix + inserted + suffix
+							editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
+							auto.Dismiss()
+							renderBox()
+							continue
+						}
+					}
+
+					if strings.HasSuffix(cand, "/") {
+						// Onion peeling: directory selected
+						inserted := "@" + cand
+						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
+						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
+						auto.UpdateQuery(cand)
+						renderBox()
+						continue
+					} else {
+						// File selected
+						inserted := "@" + cand + " "
+						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
+						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
+						auto.Dismiss()
+						renderBox()
+						continue
+					}
 				}
 				auto.Dismiss()
 				renderBox()
@@ -656,6 +699,31 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 						auto.UpdateQuery(string(lineRunes[auto.TriggerCol+1 : editor.CursorCol]))
 					}
 				}
+				renderBox()
+				continue
+			}
+		}
+
+		// Ctrl+Shift+C: copy prompt content to clipboard
+		if bytes.Equal(buf[:n], []byte("\x1b[67;6u")) || bytes.Equal(buf[:n], []byte("\x1b[99;6u")) ||
+			bytes.Equal(buf[:n], []byte("\x1b[27;6;67~")) || bytes.Equal(buf[:n], []byte("\x1b[27;6;99~")) {
+			content := editor.Content()
+			if content != "" {
+				copyToClipboard(content)
+				editor.ToastMessage = "[Copied to clipboard]"
+				editor.ToastTime = time.Now().Add(2 * time.Second)
+				renderBox()
+			}
+			continue
+		}
+
+		// When autocomplete is NOT active, typing single '/' at start of line invokes slash commands
+		if !auto.Active && n == 1 && buf[0] == '/' {
+			line := editor.Lines[editor.CursorRow]
+			prefix := strings.TrimSpace(string([]rune(line)[:editor.CursorCol]))
+			if prefix == "" {
+				editor.InsertChar('/')
+				auto.TriggerSlash(editor.CursorRow, editor.CursorCol-1)
 				renderBox()
 				continue
 			}

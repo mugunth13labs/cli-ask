@@ -76,6 +76,21 @@ type ChatUI struct {
 	IsStreaming   bool
 	ActiveCancel  context.CancelFunc
 	StreamContent strings.Builder
+
+	// Toast notification
+	ToastMessage string
+	ToastTime    time.Time
+}
+
+func (ui *ChatUI) showToastLocked(msg string) {
+	ui.ToastMessage = msg
+	ui.ToastTime = time.Now().Add(2 * time.Second)
+}
+
+func (ui *ChatUI) ShowToast(msg string) {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	ui.showToastLocked(msg)
 }
 
 func NewChatUI(cfg *Config, session *Session, opts QueryOptions, initialPrompt string, w, h int) *ChatUI {
@@ -397,7 +412,9 @@ func (ui *ChatUI) RenderRow(r int) string {
 	// 2. Divider Row between Prompt Box and Reversed History
 	if r == dividerRow {
 		title := "─ history "
-		if ui.ActiveRegion == RegionHistory {
+		if ui.ToastMessage != "" && time.Now().Before(ui.ToastTime) {
+			title = fmt.Sprintf("─ history \x1b[38;5;46m%s\x1b[38;5;39m ", ui.ToastMessage)
+		} else if ui.ActiveRegion == RegionHistory {
 			if ui.Selecting {
 				title = "─ history [ y/Enter: copy | Esc: clear ] "
 			} else {
@@ -912,7 +929,6 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		ui.PromptScroll = 0
 		helpContent := "ask chat commands:\n" +
 			"  /clear, /c         Clear chat history & session context\n" +
-			"  /model <name>      Switch AI model on the fly (or view current)\n" +
 			"  /help, /?          Show this help message\n" +
 			"  /exit, /quit, /q   Exit ask chat\n\n" +
 			"keyboard shortcuts:\n" +
@@ -926,43 +942,6 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		ui.Turns = append(ui.Turns,
 			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
 			ChatTurn{Role: "assistant", Content: helpContent, Timestamp: nowTs},
-		)
-		ui.rebuildReversedLines()
-		return false
-	}
-	if strings.HasPrefix(fullPrompt, "/model") {
-		parts := strings.Fields(fullPrompt)
-		nowTs := time.Now().Format("15:04:05")
-		ui.PromptLines = []string{""}
-		ui.PromptRow = 0
-		ui.PromptCol = 0
-		ui.PromptScroll = 0
-
-		var reply string
-		if len(parts) == 1 {
-			reply = fmt.Sprintf("Current model: %s", ui.Config.Model)
-		} else {
-			newModel := parts[1]
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			valid, err := ValidateModel(ctx, ui.Config.APIKey, newModel)
-			cancel()
-
-			if err != nil {
-				reply = fmt.Sprintf("Error checking model with OpenRouter: %v. Keeping previous model: %s", err, ui.Config.Model)
-			} else if !valid {
-				reply = fmt.Sprintf("Error: Model '%s' not found on OpenRouter. Keeping previous model: %s", newModel, ui.Config.Model)
-			} else {
-				ui.Config.Model = newModel
-				if existingCfg, err := loadConfig(); err == nil {
-					existingCfg.Model = newModel
-					_ = saveConfig(existingCfg)
-				}
-				reply = fmt.Sprintf("Model switched to: %s", newModel)
-			}
-		}
-		ui.Turns = append(ui.Turns,
-			ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
-			ChatTurn{Role: "assistant", Content: reply, Timestamp: nowTs},
 		)
 		ui.rebuildReversedLines()
 		return false
@@ -1141,6 +1120,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					selected := ui.getSelectedTextLocked()
 					if selected != "" {
 						copyToClipboard(selected)
+						ui.showToastLocked("[Copied to clipboard]")
 					}
 				}
 				continue
@@ -1213,6 +1193,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				selected := ui.getSelectedTextLocked()
 				if selected != "" {
 					copyToClipboard(selected)
+					ui.showToastLocked("[Copied to clipboard]")
 				}
 			}
 			continue
@@ -1226,6 +1207,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 				selected := ui.getSelectedTextLocked()
 				if selected != "" {
 					copyToClipboard(selected)
+					ui.showToastLocked("[Copied to clipboard]")
 				}
 			}
 			continue
@@ -1245,10 +1227,34 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					if ui.PromptCol < len(lineRunes) {
 						suffix = string(lineRunes[ui.PromptCol:])
 					}
-					inserted := "@" + cand + " "
-					ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-					ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
-					ui.adjustPromptScroll()
+
+					if ui.Auto.Mode == AutocompleteModeSlash {
+						inserted := cand + " "
+						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+						ui.Auto.Dismiss()
+						ui.adjustPromptScroll()
+						continue
+					}
+
+					// File autocomplete
+					if strings.HasSuffix(cand, "/") {
+						// Onion peeling: directory selected
+						inserted := "@" + cand
+						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+						ui.Auto.UpdateQuery(cand)
+						ui.adjustPromptScroll()
+						continue
+					} else {
+						// File selected
+						inserted := "@" + cand + " "
+						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+						ui.Auto.Dismiss()
+						ui.adjustPromptScroll()
+						continue
+					}
 				}
 				ui.Auto.Dismiss()
 				continue
@@ -1283,10 +1289,35 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					if ui.PromptCol < len(lineRunes) {
 						suffix = string(lineRunes[ui.PromptCol:])
 					}
-					inserted := "@" + cand + " "
-					ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-					ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
-					ui.adjustPromptScroll()
+
+					if ui.Auto.Mode == AutocompleteModeSlash {
+						// Slash command selected with Enter: dispatch immediately!
+						ui.PromptLines[ui.PromptRow] = cand
+						ui.PromptCol = len([]rune(cand))
+						ui.Auto.Dismiss()
+						if ui.submitPrompt() {
+							return true
+						}
+						continue
+					}
+
+					// File autocomplete
+					if strings.HasSuffix(cand, "/") {
+						// Onion peeling: directory selected
+						inserted := "@" + cand
+						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+						ui.Auto.UpdateQuery(cand)
+						ui.adjustPromptScroll()
+						continue
+					} else {
+						inserted := "@" + cand + " "
+						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+						ui.Auto.Dismiss()
+						ui.adjustPromptScroll()
+						continue
+					}
 				}
 				ui.Auto.Dismiss()
 				continue
@@ -1337,6 +1368,21 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 		textBytes := inBuf[offset:end]
 		offset = end
 		if len(textBytes) > 0 {
+			// Trigger slash command autocomplete when user directly types single '/' at line start
+			if len(textBytes) == 1 && textBytes[0] == '/' && (ui.Auto == nil || !ui.Auto.Active) {
+				line := ui.PromptLines[ui.PromptRow]
+				runes := []rune(line)
+				prefix := strings.TrimSpace(string(runes[:ui.PromptCol]))
+				if prefix == "" {
+					ui.insertText("/")
+					if ui.Auto != nil {
+						ui.Auto.TriggerSlash(ui.PromptRow, ui.PromptCol-1)
+					}
+					ui.adjustPromptScroll()
+					continue
+				}
+			}
+
 			// Trigger autocomplete when user directly types single '@'
 			if len(textBytes) == 1 && textBytes[0] == '@' && (ui.Auto == nil || !ui.Auto.Active) {
 				ui.insertText("@")

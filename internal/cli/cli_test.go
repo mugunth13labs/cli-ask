@@ -503,19 +503,23 @@ func TestCrossLineBackspaceExtensive(t *testing.T) {
 
 func TestStrictSlashCommands(t *testing.T) {
 	// Plain words without slash MUST NOT be chat commands
-	plainWords := []string{"exit", "quit", "clear", "model", "help", "q", "c", "exit 1", "quit()"}
+	plainWords := []string{"exit", "quit", "clear", "help", "q", "c", "exit 1", "quit()"}
 	for _, word := range plainWords {
 		if isChatCommand(word) {
 			t.Errorf("word %q without slash must NOT be a chat command", word)
 		}
 	}
 
-	// Slash commands MUST be recognized
-	validCommands := []string{"/exit", "/quit", "/q", "/clear", "/c", "/model", "/model meta/llama-3", "/help", "/?"}
+	// Slash commands MUST be recognized (/model is intentionally removed from chat commands)
+	validCommands := []string{"/exit", "/quit", "/q", "/clear", "/c", "/help", "/?"}
 	for _, cmd := range validCommands {
 		if !isChatCommand(cmd) {
 			t.Errorf("command %q with slash MUST be recognized as a chat command", cmd)
 		}
+	}
+
+	if isChatCommand("/model") || isChatCommand("/model gpt-4") {
+		t.Errorf("/model must NOT be recognized as an in-chat command; use --set-model instead")
 	}
 }
 
