@@ -13,18 +13,6 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	ansiEnterAltScreen = "\x1b[?1049h\x1b[H\x1b[2J"
-	ansiLeaveAltScreen = "\x1b[?1049l"
-	ansiEnablePaste    = "\x1b[?2004h"
-	ansiDisablePaste   = "\x1b[?2004l"
-	ansiHideCursor     = "\x1b[?25l"
-	ansiShowCursor     = "\x1b[?25h"
-	ansiClearScreen     = "\x1b[H\x1b[2J"
-	ansiEnableKeyboard  = "\x1b[>1u\x1b[>4;2m"
-	ansiDisableKeyboard = "\x1b[<u\x1b[>4;0m"
-)
-
 type MicroEditor struct {
 	Lines        []string
 	CursorRow    int
@@ -47,43 +35,6 @@ func NewMicroEditor(title, subtitle string) *MicroEditor {
 
 func (e *MicroEditor) Content() string {
 	return strings.TrimSpace(strings.Join(e.Lines, "\n"))
-}
-
-func (e *MicroEditor) Render() {
-	var b strings.Builder
-	b.WriteString(ansiHideCursor)
-	b.WriteString(ansiClearScreen)
-
-	// Draw Header
-	b.WriteString(fmt.Sprintf("%s\n", e.Title))
-	if e.Subtitle != "" {
-		b.WriteString(fmt.Sprintf("%s\n", e.Subtitle))
-	}
-	b.WriteString("──────────────────────────────────────────────────────────────────────────────\n")
-
-	// Draw Lines with line indicators
-	for i, line := range e.Lines {
-		prefix := "  "
-		if i == e.CursorRow {
-			prefix = "> "
-		}
-		b.WriteString(fmt.Sprintf("%s%s\n", prefix, line))
-	}
-
-	// Position cursor at active editing point
-	// Row offset: Title(1) + Subtitle(1 if exists) + Separator(1) + CursorRow(0-based) + 1 (1-based ANSI)
-	headerRows := 2
-	if e.Subtitle != "" {
-		headerRows = 3
-	}
-	targetRow := headerRows + e.CursorRow + 1
-	targetCol := 3 + e.CursorCol // prefix is 2 chars + 1 for 1-based ANSI
-
-	b.WriteString(fmt.Sprintf("\x1b[%d;%dH", targetRow, targetCol))
-	b.WriteString(ansiShowCursor)
-
-	_, _ = os.Stdout.WriteString(b.String())
-	_ = os.Stdout.Sync()
 }
 
 func (e *MicroEditor) InsertChar(ch rune) {
@@ -279,71 +230,6 @@ func (e *MicroEditor) MoveDown() {
 	}
 }
 
-type visLine struct {
-	text      string
-	lineIdx   int
-	runeStart int
-	runeEnd   int
-}
-
-func getVisualLines(lines []string, maxContentWidth int) []visLine {
-	if maxContentWidth <= 10 {
-		maxContentWidth = 10
-	}
-	var res []visLine
-	for lIdx, l := range lines {
-		runes := []rune(l)
-		if len(runes) == 0 {
-			res = append(res, visLine{text: "", lineIdx: lIdx, runeStart: 0, runeEnd: 0})
-			continue
-		}
-		start := 0
-		for start < len(runes) {
-			end := start + maxContentWidth
-			if end > len(runes) {
-				end = len(runes)
-			}
-			res = append(res, visLine{
-				text:      string(runes[start:end]),
-				lineIdx:   lIdx,
-				runeStart: start,
-				runeEnd:   end,
-			})
-			start = end
-		}
-	}
-	return res
-}
-
-func getCursorVisPos(visLines []visLine, cursorRow, cursorCol int) (int, int) {
-	visRow := 0
-	visCol := 0
-	found := false
-
-	for i, vl := range visLines {
-		if vl.lineIdx == cursorRow {
-			if cursorCol >= vl.runeStart && cursorCol <= vl.runeEnd {
-				visRow = i
-				visCol = cursorCol - vl.runeStart
-				found = true
-				if cursorCol == vl.runeEnd && i+1 < len(visLines) && visLines[i+1].lineIdx == cursorRow {
-					visRow = i + 1
-					visCol = 0
-				}
-				break
-			}
-		}
-	}
-
-	if !found {
-		if len(visLines) > 0 {
-			visRow = len(visLines) - 1
-			visCol = len([]rune(visLines[visRow].text))
-		}
-	}
-	return visRow, visCol
-}
-
 // formatInlineComposerBox renders the framed box for the inline multiline prompt composer,
 // restricting visible content lines to maxVisibleLines (default 5) and maintaining a sliding viewport.
 func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines int, scrollOffset int, targetDesc string) (string, []string, string, int, int, int) {
@@ -359,8 +245,8 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 		maxTextWidth = 10
 	}
 
-	visLines := getVisualLines(editor.Lines, maxTextWidth)
-	visRow, visCol := getCursorVisPos(visLines, editor.CursorRow, editor.CursorCol)
+	visLines := WrapLogicalLinesToVisual(editor.Lines, maxTextWidth)
+	visRow, visCol := VisualPosFromLogical(visLines, editor.CursorRow, editor.CursorCol)
 
 	// Adjust scrollOffset to keep visRow inside [scrollOffset, scrollOffset + maxVisibleLines - 1]
 	if visRow < scrollOffset {
@@ -409,13 +295,13 @@ func formatInlineComposerBox(editor *MicroEditor, boxWidth int, maxVisibleLines 
 
 	contentLines := make([]string, 0, len(windowLines))
 	for _, vl := range windowLines {
-		lineRunes := utf8.RuneCountInString(vl.text)
+		lineRunes := utf8.RuneCountInString(vl.Text)
 		padLen := maxTextWidth - lineRunes
 		pad := ""
 		if padLen > 0 {
 			pad = strings.Repeat(" ", padLen)
 		}
-		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;17m\x1b[97m  %s%s  \x1b[0m", vl.text, pad))
+		contentLines = append(contentLines, fmt.Sprintf("\x1b[48;5;17m\x1b[97m  %s%s  \x1b[0m", vl.Text, pad))
 	}
 
 	// Bottom border with scroll down indicator if lines remain below
@@ -609,37 +495,16 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 			if buf[0] == 9 || buf[0] == 13 || (n == 1 && buf[0] == 10) {
 				cand := auto.SelectedCandidate()
 				if cand != "" && auto.TriggerRow < len(editor.Lines) {
-					line := editor.Lines[editor.CursorRow]
-					lineRunes := []rune(line)
-					prefix := string(lineRunes[:auto.TriggerCol])
-					suffix := ""
-					if editor.CursorCol < len(lineRunes) {
-						suffix = string(lineRunes[editor.CursorCol:])
-					}
-
+					editor.Lines, editor.CursorCol = ApplyAutocompleteCandidate(
+						editor.Lines, editor.CursorRow, editor.CursorCol, auto.TriggerCol, cand, false,
+					)
 					if strings.HasSuffix(cand, "/") {
-						// Onion peeling: directory selected
-						inserted := "@" + cand
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\""
-						}
-						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
-						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
 						auto.UpdateQuery(cand)
-						renderBox()
-						continue
 					} else {
-						// File selected
-						inserted := "@" + cand + " "
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\" "
-						}
-						editor.Lines[editor.CursorRow] = prefix + inserted + suffix
-						editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
 						auto.Dismiss()
-						renderBox()
-						continue
 					}
+					renderBox()
+					continue
 				}
 				auto.Dismiss()
 				renderBox()
@@ -727,96 +592,6 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 		}
 
 		renderBox()
-	}
-}
-
-// runComposer executes the micro-editor in the alternate screen buffer
-// Returns (prompt, isCancelled, error)
-func runComposer(title, subtitle string) (string, bool, error) {
-	// Enable alternate screen, bracketed paste, and enhanced keyboard
-	_, _ = os.Stdout.WriteString(ansiEnterAltScreen + ansiEnablePaste + ansiEnableKeyboard)
-	_ = os.Stdout.Sync()
-
-	fd := os.Stdin.Fd()
-	state, err := makeRaw(fd)
-	if err != nil {
-		// Cleanup alternate screen on error
-		_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiDisableKeyboard + ansiLeaveAltScreen)
-		_ = os.Stdout.Sync()
-		return "", false, err
-	}
-
-	var cleanupOnce sync.Once
-	cleanup := func() {
-		cleanupOnce.Do(func() {
-			_, _ = os.Stdout.WriteString(ansiDisablePaste + ansiDisableKeyboard + ansiLeaveAltScreen + ansiShowCursor + "\x1b[0m\r")
-			_ = os.Stdout.Sync()
-			_ = restoreTerm(fd, state)
-		})
-	}
-	defer cleanup()
-
-	// Handle SIGINT to restore terminal cleanly
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
-	defer signal.Stop(sigChan)
-
-	go func() {
-		<-sigChan
-		cleanup()
-		os.Exit(130)
-	}()
-
-	editor := NewMicroEditor(title, subtitle)
-	editor.Render()
-
-	buf := make([]byte, 1024)
-
-	for {
-		n, readErr := os.Stdin.Read(buf)
-		if readErr != nil {
-			if readErr == io.EOF {
-				return "", true, nil
-			}
-			return "", false, readErr
-		}
-		if n == 0 {
-			continue
-		}
-
-		input := string(buf[:n])
-
-		// Handle bracketed paste blocks: \x1b[2004~ ... \x1b[2004~
-		if strings.Contains(input, "\x1b[2004~") {
-			parts := strings.Split(input, "\x1b[2004~")
-			for i, part := range parts {
-				if i%2 == 1 {
-					// Inside paste payload: insert all characters verbatim
-					editor.InsertText(part)
-				} else if part != "" {
-					processInput(editor, []byte(part))
-				}
-			}
-			editor.Render()
-			continue
-		}
-
-		shouldSubmit, shouldCancel := processInput(editor, buf[:n])
-		if shouldCancel {
-			return "", true, nil
-		}
-		if shouldSubmit {
-			content := editor.Content()
-			lower := strings.ToLower(content)
-			// STRICT: Only commands with leading slash exit (/exit, /quit, /q).
-			// Words without slash (like "exit" or "quit") are treated as literal prompt text!
-			if lower == "/exit" || lower == "/quit" || lower == "/q" {
-				return "", true, nil
-			}
-			return content, false, nil
-		}
-
-		editor.Render()
 	}
 }
 
@@ -1004,26 +779,9 @@ func processInput(editor *MicroEditor, data []byte) (bool, bool) {
 		// ANSI Escape Sequences
 		if b == 27 {
 			rem := data[i:]
-			remStr := string(rem)
 
-			// 1. Check for Alt+Right submit, Ctrl+Enter, Alt+Enter, or Ctrl+S sequences:
-			// \x1b[1;3C (Alt+Right), \x1b\x1b[C (macOS Alt+Right),
-			// \x1b[13;5u (CSI u), \x1b[27;5;13~ (xterm), \x1b[10;5u, \x1b[27;5;10~, \x1b[10~, \x1b[13~, \x1b\r, \x1b\n,
-			// \x1b[115;5u / \x1b[83;5u (Kitty Ctrl+S), \x1b[27;5;115~ / \x1b[27;5;83~ (xterm Ctrl+S)
-			if strings.HasPrefix(remStr, "\x1b[1;3C") ||
-				strings.HasPrefix(remStr, "\x1b\x1b[C") ||
-				strings.HasPrefix(remStr, "\x1b[13;5u") ||
-				strings.HasPrefix(remStr, "\x1b[27;5;13~") ||
-				strings.HasPrefix(remStr, "\x1b[10;5u") ||
-				strings.HasPrefix(remStr, "\x1b[27;5;10~") ||
-				strings.HasPrefix(remStr, "\x1b[10~") ||
-				strings.HasPrefix(remStr, "\x1b[13~") ||
-				strings.HasPrefix(remStr, "\x1b\r") ||
-				strings.HasPrefix(remStr, "\x1b\n") ||
-				strings.HasPrefix(remStr, "\x1b[115;5u") ||
-				strings.HasPrefix(remStr, "\x1b[83;5u") ||
-				strings.HasPrefix(remStr, "\x1b[27;5;115~") ||
-				strings.HasPrefix(remStr, "\x1b[27;5;83~") {
+			// 1. Check for Alt+Right submit, Ctrl+Enter, Alt+Enter, or Ctrl+S sequences
+			if ok, _ := HasSubmitPrefix(rem); ok {
 				return true, false
 			}
 

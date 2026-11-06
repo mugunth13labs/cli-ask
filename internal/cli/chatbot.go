@@ -55,39 +55,14 @@ func readChatPromptCooked(reader *bufio.Reader) (string, error) {
 		}
 
 		// Detect terminal escape sequences for Alt+Right, Ctrl+Enter, Alt+Enter, Ctrl+S
-		hasSubmitSeq := strings.Contains(line, "\x1b[1;3C") ||
-			strings.Contains(line, "\x1b\x1b[C") ||
-			strings.Contains(line, "\x1b[13;5u") ||
-			strings.Contains(line, "\x1b[27;5;13~") ||
-			strings.Contains(line, "\x1b[10;5u") ||
-			strings.Contains(line, "\x1b[27;5;10~") ||
-			strings.Contains(line, "\x1b[10~") ||
-			strings.Contains(line, "\x1b[13~") ||
-			strings.Contains(line, "\x1b\r") ||
-			strings.Contains(line, "\x1b\n") ||
-			strings.Contains(line, "\x1b[115;5u") ||
-			strings.Contains(line, "\x1b[83;5u") ||
-			strings.Contains(line, "\x1b[27;5;115~") ||
-			strings.Contains(line, "\x1b[27;5;83~") ||
-			strings.Contains(line, "\x13")
+		cleanedLine, hasSubmitSeq := StripSubmitKeySequences(line)
+		if strings.Contains(cleanedLine, "\x13") {
+			hasSubmitSeq = true
+			cleanedLine = strings.ReplaceAll(cleanedLine, "\x13", "")
+		}
 		if hasSubmitSeq {
-			line = strings.ReplaceAll(line, "\x1b[1;3C", "")
-			line = strings.ReplaceAll(line, "\x1b\x1b[C", "")
-			line = strings.ReplaceAll(line, "\x1b[13;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;13~", "")
-			line = strings.ReplaceAll(line, "\x1b[10;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;10~", "")
-			line = strings.ReplaceAll(line, "\x1b[10~", "")
-			line = strings.ReplaceAll(line, "\x1b[13~", "")
-			line = strings.ReplaceAll(line, "\x1b\r", "")
-			line = strings.ReplaceAll(line, "\x1b\n", "")
-			line = strings.ReplaceAll(line, "\x1b[115;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[83;5u", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;115~", "")
-			line = strings.ReplaceAll(line, "\x1b[27;5;83~", "")
-			line = strings.ReplaceAll(line, "\x13", "")
-			if strings.TrimSpace(line) != "" {
-				lines = append(lines, line)
+			if strings.TrimSpace(cleanedLine) != "" {
+				lines = append(lines, cleanedLine)
 			}
 			break
 		}
@@ -463,18 +438,11 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 			return
 		}
 
-		var apiMessages []Message
-		activePrompt := systemPrompt
-		if opts.IsCodeGen {
-			activePrompt = codePrompt
+		var history []Message
+		if session != nil {
+			history = session.Messages
 		}
-		apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
-
-		if len(session.Messages) > 0 {
-			compacted := compactHistory(session.Messages)
-			apiMessages = append(apiMessages, compacted...)
-		}
-		apiMessages = append(apiMessages, Message{Role: "user", Content: prompt})
+		apiMessages := buildAPIMessages(opts.IsCodeGen, history, prompt)
 
 		queryCtx, cancel := context.WithCancel(context.Background())
 		mu.Lock()
@@ -571,17 +539,11 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 				continue
 			}
 			// Execute with past context, but do not save to session
-			activePrompt := systemPrompt
-			if opts.IsCodeGen {
-				activePrompt = codePrompt
+			var history []Message
+			if session != nil {
+				history = session.Messages
 			}
-			var apiMessages []Message
-			apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
-			if session != nil && len(session.Messages) > 0 {
-				compacted := compactHistory(session.Messages)
-				apiMessages = append(apiMessages, compacted...)
-			}
-			apiMessages = append(apiMessages, Message{Role: "user", Content: btwQuery})
+			apiMessages := buildAPIMessages(opts.IsCodeGen, history, btwQuery)
 			queryCtx := context.Background()
 			response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, opts)
 			if queryErr != nil {

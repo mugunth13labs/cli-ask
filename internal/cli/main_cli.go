@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	version = "0.7.4"
+	version = "0.7.5"
 )
 
 var codeFileExts = map[string]bool{
@@ -404,12 +404,6 @@ func Run(cmdArgs []string) {
 		cfg, _ := loadConfig()
 		HandleGhostCompleteCLI(cfg, parsed.ActionArg)
 		return
-	case "toggle-ghost":
-		if err := ToggleShellGhost(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
 	case "install-shell-ghost":
 		if err := InstallShellGhost(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -527,12 +521,6 @@ func Run(cmdArgs []string) {
 		currentSession, _ = loadSession(sessionID)
 	}
 
-	// Select system prompt based on codegen mode
-	activeSystemPrompt := systemPrompt
-	if isCodeGen {
-		activeSystemPrompt = codePrompt
-	}
-
 	// Check for @filename references and resolve attachments
 	refs := ExtractFileReferences(userPrompt)
 	var attachments []FileAttachment
@@ -551,15 +539,11 @@ func Run(cmdArgs []string) {
 		apiUserPrompt = userPrompt + fileContext
 	}
 
-	var apiMessages []Message
-	apiMessages = append(apiMessages, Message{Role: "system", Content: activeSystemPrompt})
-
-	if parsed.UseContext && currentSession != nil && len(currentSession.Messages) > 0 {
-		compacted := compactHistory(currentSession.Messages)
-		apiMessages = append(apiMessages, compacted...)
+	var history []Message
+	if parsed.UseContext && currentSession != nil {
+		history = currentSession.Messages
 	}
-
-	apiMessages = append(apiMessages, Message{Role: "user", Content: apiUserPrompt})
+	apiMessages := buildAPIMessages(queryOpts.IsCodeGen, history, apiUserPrompt)
 
 	ctx := context.Background()
 	response, queryErr := queryOpenRouter(ctx, cfg, apiMessages, queryOpts)

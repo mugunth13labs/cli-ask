@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -607,13 +608,7 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 		end = total
 	}
 
-	cyan := "\x1b[38;5;39m"
-	amber := "\x1b[38;5;214m"
-	white := "\x1b[97m"
-	navyBg := "\x1b[48;5;17m"
-	reset := "\x1b[0m"
-
-	innerW := w - 4 // between │ and │ (2 spaces on borders)
+	innerW := w - 6 // leave space for "  > " (4 chars) and right margin (2 chars)
 	if innerW < 10 {
 		innerW = 10
 	}
@@ -625,14 +620,14 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 		titleKind = "commands"
 	}
 
-	// Header: ┌─ files (X/Y) ───┐ or ┌─ commands (X/Y) ───┐
-	headerTitle := fmt.Sprintf("┌─ %s (%d/%d) ", titleKind, auto.SelectedIndex+1, total)
-	hRunes := utf8RuneCount(headerTitle)
+	// Header: ── files (X/Y) ────────────────────────────────
+	headerTitle := fmt.Sprintf("── %s (%d/%d) ", titleKind, auto.SelectedIndex+1, total)
+	hRunes := utf8.RuneCountInString(headerTitle)
 	dashes := ""
-	if hRunes < w-1 {
-		dashes = strings.Repeat("─", (w-1)-hRunes)
+	if hRunes < w {
+		dashes = strings.Repeat("─", w-hRunes)
 	}
-	res = append(res, cyan+headerTitle+dashes+"┐"+reset)
+	res = append(res, ColorCyan+headerTitle+dashes+AnsiReset)
 
 	for i := start; i < end; i++ {
 		cand := auto.Candidates[i]
@@ -642,46 +637,83 @@ func FormatDropdownLines(auto *AutocompleteState, boxWidth int) []string {
 		}
 
 		display := cand
-		if desc != "" && innerW > 35 {
+		if desc != "" && innerW > 30 {
 			maxCand := 10
-			if len([]rune(cand)) < maxCand {
-				candPad := strings.Repeat(" ", maxCand-len([]rune(cand)))
+			candRunes := utf8.RuneCountInString(cand)
+			if candRunes < maxCand {
+				candPad := strings.Repeat(" ", maxCand-candRunes)
 				display = cand + candPad + " " + desc
 			} else {
 				display = cand + " " + desc
 			}
 		}
 
-		candRunes := []rune(display)
-		maxCandW := innerW - 3 // leave room for ' > ' or '   '
-		if len(candRunes) > maxCandW {
-			display = string(candRunes[:maxCandW-3]) + "..."
+		displayRunes := utf8.RuneCountInString(display)
+		maxCandW := w - 4 // total space after 4-column prefix ("  > " or "    ")
+		if displayRunes > maxCandW {
+			runes := []rune(display)
+			display = string(runes[:maxCandW-3]) + "..."
+			displayRunes = utf8.RuneCountInString(display)
 		}
-		candRunes = []rune(display)
 		pad := ""
-		if len(candRunes) < maxCandW {
-			pad = strings.Repeat(" ", maxCandW-len(candRunes))
+		if displayRunes < maxCandW {
+			pad = strings.Repeat(" ", maxCandW-displayRunes)
 		}
 
 		if i == auto.SelectedIndex {
 			// Amber highlighted item with navy background
-			row := fmt.Sprintf("%s│%s%s > %s%s %s%s│%s", cyan, reset, navyBg+amber+"\x1b[1m", display, pad, reset, cyan, reset)
+			row := fmt.Sprintf("%s%s%s  > %s%s%s", ColorNavyBg, ColorAmber, AnsiBold, display, pad, AnsiReset)
 			res = append(res, row)
 		} else {
 			// Bright white item with navy background
-			row := fmt.Sprintf("%s│%s%s   %s%s %s%s│%s", cyan, reset, navyBg+white, display, pad, reset, cyan, reset)
+			row := fmt.Sprintf("%s%s    %s%s%s", ColorNavyBg, ColorWhite, display, pad, AnsiReset)
 			res = append(res, row)
 		}
 	}
 
-	// Bottom: └───────────────┘
-	bottom := fmt.Sprintf("└%s┘", strings.Repeat("─", w-2))
-	res = append(res, cyan+bottom+reset)
+	// Bottom: ──────────────────────────────────────────────
+	bottom := strings.Repeat("─", w)
+	res = append(res, ColorCyan+bottom+AnsiReset)
 
 	return res
 }
 
-func utf8RuneCount(s string) int {
-	return len([]rune(s))
+// ApplyAutocompleteCandidate inserts an autocomplete selection into the lines buffer at triggerCol,
+// returning the modified lines and new cursor column.
+func ApplyAutocompleteCandidate(lines []string, cursorRow, cursorCol, triggerCol int, candidate string, isSlash bool) ([]string, int) {
+	if cursorRow >= len(lines) {
+		return lines, cursorCol
+	}
+	line := lines[cursorRow]
+	lineRunes := []rune(line)
+	if triggerCol > len(lineRunes) {
+		triggerCol = len(lineRunes)
+	}
+	prefix := string(lineRunes[:triggerCol])
+	suffix := ""
+	if cursorCol < len(lineRunes) {
+		suffix = string(lineRunes[cursorCol:])
+	}
+
+	var inserted string
+	if isSlash {
+		inserted = candidate + " "
+	} else if strings.HasSuffix(candidate, "/") {
+		inserted = "@" + candidate
+		if strings.Contains(candidate, " ") {
+			inserted = "@\"" + candidate + "\""
+		}
+	} else {
+		inserted = "@" + candidate + " "
+		if strings.Contains(candidate, " ") {
+			inserted = "@\"" + candidate + "\" "
+		}
+	}
+
+	newLines := make([]string, len(lines))
+	copy(newLines, lines)
+	newLines[cursorRow] = prefix + inserted + suffix
+	newCol := triggerCol + utf8.RuneCountInString(inserted)
+	return newLines, newCol
 }
 

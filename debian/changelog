@@ -1,3 +1,13 @@
+cli-ask (0.7.5-1) unstable; urgency=medium
+
+  * Architectural decoupling and codebase optimization across pure standard library Go core.
+  * Prune dead code including unused composer buffer methods and legacy ghost complete references.
+  * Unify visual text wrapping and coordinate mapping into a shared, robust engine.
+  * Centralize submit key sequence detection and ANSI styling palette into ansi.go.
+  * Enable shared HTTP keep-alive connection pooling for low-latency multi-turn queries.
+
+ -- Mugunthan Mohan <mugunthan13labs@gmail.com>  Fri, 06 Nov 2026 20:30:00 +0800
+
 cli-ask (0.7.4-1) unstable; urgency=medium
 
   * Replace --ghost-complete with thematic flags: --summon-ghost and --raise-ghost to install and enable Ghost-Complete in shell profiles.

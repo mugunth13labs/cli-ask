@@ -21,6 +21,18 @@ const (
 	codePrompt    = "You are a direct code generation engine. You must output ONLY valid, executable, raw code, script, or configuration text. DO NOT include any conversational introduction, English commentary, concluding notes, markdown headers (#), ASCII section titles, or markdown backtick code blocks (```). All comments must be native code comments (e.g. # or //) within the script itself. Start immediately with the first character of code or shebang and end with the last line of code."
 )
 
+var (
+	defaultHTTPTransport = &http.Transport{
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression: false,
+	}
+	defaultHTTPClient = &http.Client{
+		Transport: defaultHTTPTransport,
+		Timeout:   90 * time.Second,
+	}
+)
+
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
@@ -147,8 +159,7 @@ func queryOpenRouter(ctx context.Context, cfg *Config, messages []Message, opts 
 		targetFile = f
 	}
 
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
 		if opts.IsStderrTerminal && opts.OnToken == nil {
 			fmt.Fprint(os.Stderr, "\r\033[K")
@@ -326,7 +337,10 @@ func ValidateModel(ctx context.Context, apiKey, modelID string) (bool, error) {
 	}
 	modelsCacheMu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", openRouterModelsURL, nil)
+	valCtx, valCancel := context.WithTimeout(ctx, 8*time.Second)
+	defer valCancel()
+
+	req, err := http.NewRequestWithContext(valCtx, "GET", openRouterModelsURL, nil)
 	if err != nil {
 		return false, err
 	}
@@ -336,8 +350,7 @@ func ValidateModel(ctx context.Context, apiKey, modelID string) (bool, error) {
 	req.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
 	req.Header.Set("X-Title", "ask-cli")
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("failed to reach OpenRouter: %w", err)
 	}

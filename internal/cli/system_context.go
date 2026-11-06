@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,8 +40,9 @@ var (
 func GetActiveSystemContext() *SystemContext {
 	contextMutex.RLock()
 	if cachedContext != nil {
-		defer contextMutex.RUnlock()
-		return cachedContext
+		res := cachedContext
+		contextMutex.RUnlock()
+		return res
 	}
 	contextMutex.RUnlock()
 
@@ -204,12 +206,18 @@ func probeLinuxOS() (distro, build string) {
 	return distro, build
 }
 
+func execProbe(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
 func probeDarwinOS() (distro, build string) {
 	distro = "macOS"
-	if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+	if out, err := execProbe(1500*time.Millisecond, "sw_vers", "-productVersion"); err == nil {
 		distro = "macOS " + strings.TrimSpace(string(out))
 	}
-	if out, err := exec.Command("sw_vers", "-buildVersion").Output(); err == nil {
+	if out, err := execProbe(1500*time.Millisecond, "sw_vers", "-buildVersion"); err == nil {
 		build = "Build " + strings.TrimSpace(string(out))
 	}
 	return distro, build
@@ -218,12 +226,12 @@ func probeDarwinOS() (distro, build string) {
 func probeShellVersion(shell string) string {
 	switch shell {
 	case "powershell":
-		out, err := exec.Command("powershell", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()").Output()
+		out, err := execProbe(1500*time.Millisecond, "powershell", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()")
 		if err == nil {
 			return "PowerShell " + strings.TrimSpace(string(out))
 		}
 	case "bash":
-		out, err := exec.Command("bash", "-c", `echo "$BASH_VERSION"`).Output()
+		out, err := execProbe(1500*time.Millisecond, "bash", "-c", `echo "$BASH_VERSION"`)
 		if err == nil {
 			ver := strings.TrimSpace(string(out))
 			if idx := strings.Index(ver, "("); idx != -1 {
@@ -232,12 +240,12 @@ func probeShellVersion(shell string) string {
 			return "Bash " + ver
 		}
 	case "zsh":
-		out, err := exec.Command("zsh", "-c", `echo "$ZSH_VERSION"`).Output()
+		out, err := execProbe(1500*time.Millisecond, "zsh", "-c", `echo "$ZSH_VERSION"`)
 		if err == nil {
 			return "Zsh " + strings.TrimSpace(string(out))
 		}
 	case "fish":
-		out, err := exec.Command("fish", "-c", `echo "$FISH_VERSION"`).Output()
+		out, err := execProbe(1500*time.Millisecond, "fish", "-c", `echo "$FISH_VERSION"`)
 		if err == nil {
 			return "Fish " + strings.TrimSpace(string(out))
 		}

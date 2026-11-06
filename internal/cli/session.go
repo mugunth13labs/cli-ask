@@ -150,3 +150,18 @@ func compactHistory(messages []Message) []Message {
 	result = append(result, recent...)
 	return result
 }
+
+// buildAPIMessages constructs the standard system prompt, compacted history, and user message payload.
+func buildAPIMessages(isCodeGen bool, history []Message, userPrompt string) []Message {
+	sysPrompt := systemPrompt
+	if isCodeGen {
+		sysPrompt = codePrompt
+	}
+	apiMessages := []Message{{Role: "system", Content: sysPrompt}}
+	if len(history) > 0 {
+		apiMessages = append(apiMessages, compactHistory(history)...)
+	}
+	apiMessages = append(apiMessages, Message{Role: "user", Content: userPrompt})
+	return apiMessages
+}
+

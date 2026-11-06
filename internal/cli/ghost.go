@@ -140,7 +140,10 @@ Instructions:
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
+	ghostCtx, ghostCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer ghostCancel()
+
+	httpReq, err := http.NewRequestWithContext(ghostCtx, "POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -150,8 +153,7 @@ Instructions:
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/mugunth13labs/cli-ask")
 	httpReq.Header.Set("X-Title", "ask-autocomplete")
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := defaultHTTPClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("query openrouter: %w", err)
 	}

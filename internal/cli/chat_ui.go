@@ -41,12 +41,7 @@ type HistLine struct {
 	EndsWithNewline bool
 }
 
-type VisPromptLine struct {
-	LogicalRow int
-	StartCol   int
-	EndCol     int
-	Text       string
-}
+type VisPromptLine = VisLine
 
 type ChatUI struct {
 	mu           sync.Mutex
@@ -150,96 +145,15 @@ func (ui *ChatUI) Resize(w, h int) {
 }
 
 func (ui *ChatUI) getVisualPromptLines(maxWidth int) []VisPromptLine {
-	if maxWidth < 4 {
-		maxWidth = 4
-	}
-	var vis []VisPromptLine
-
-	for lIdx, line := range ui.PromptLines {
-		runes := []rune(line)
-		if len(runes) == 0 {
-			vis = append(vis, VisPromptLine{LogicalRow: lIdx, StartCol: 0, EndCol: 0, Text: ""})
-			continue
-		}
-
-		offset := 0
-		for offset < len(runes) {
-			rem := len(runes) - offset
-			if rem <= maxWidth {
-				vis = append(vis, VisPromptLine{
-					LogicalRow: lIdx,
-					StartCol:   offset,
-					EndCol:     len(runes),
-					Text:       string(runes[offset:]),
-				})
-				break
-			}
-
-			// Try to break at word boundary
-			breakIdx := offset + maxWidth
-			foundSpace := false
-			for i := offset + maxWidth; i > offset+maxWidth/2; i-- {
-				if runes[i] == ' ' || runes[i] == '\t' {
-					breakIdx = i + 1
-					foundSpace = true
-					break
-				}
-			}
-
-			if !foundSpace {
-				breakIdx = offset + maxWidth
-			}
-
-			vis = append(vis, VisPromptLine{
-				LogicalRow: lIdx,
-				StartCol:   offset,
-				EndCol:     breakIdx,
-				Text:       string(runes[offset:breakIdx]),
-			})
-			offset = breakIdx
-		}
-	}
-	if len(vis) == 0 {
-		vis = append(vis, VisPromptLine{LogicalRow: 0, StartCol: 0, EndCol: 0, Text: ""})
-	}
-	return vis
+	return WrapLogicalLinesToVisual(ui.PromptLines, maxWidth)
 }
 
 func (ui *ChatUI) cursorToVis(vis []VisPromptLine) (visRow, visCol int) {
-	for i, v := range vis {
-		if v.LogicalRow == ui.PromptRow {
-			isLast := (i == len(vis)-1) || (vis[i+1].LogicalRow != ui.PromptRow)
-			if ui.PromptCol >= v.StartCol && (ui.PromptCol < v.EndCol || (isLast && ui.PromptCol <= v.EndCol)) {
-				return i, ui.PromptCol - v.StartCol
-			}
-		}
-	}
-	if len(vis) > 0 {
-		lastIdx := len(vis) - 1
-		return lastIdx, len([]rune(vis[lastIdx].Text))
-	}
-	return 0, 0
+	return VisualPosFromLogical(vis, ui.PromptRow, ui.PromptCol)
 }
 
 func (ui *ChatUI) visToCursor(vis []VisPromptLine, targetVisRow, targetVisCol int) {
-	if targetVisRow < 0 {
-		targetVisRow = 0
-	}
-	if targetVisRow >= len(vis) {
-		targetVisRow = len(vis) - 1
-	}
-	v := vis[targetVisRow]
-	ui.PromptRow = v.LogicalRow
-	lineRunes := len([]rune(v.Text))
-	col := targetVisCol
-	if col > lineRunes {
-		col = lineRunes
-	}
-	ui.PromptCol = v.StartCol + col
-	curLogicalLen := len([]rune(ui.PromptLines[ui.PromptRow]))
-	if ui.PromptCol > curLogicalLen {
-		ui.PromptCol = curLogicalLen
-	}
+	ui.PromptRow, ui.PromptCol = LogicalPosFromVisual(vis, targetVisRow, targetVisCol)
 }
 
 func formatCenteredLine(title string, width int) string {
@@ -771,54 +685,7 @@ func (ui *ChatUI) insertText(s string) {
 }
 
 func parseEscapeSeq(b []byte) int {
-	if len(b) == 0 || b[0] != 0x1b {
-		return 0
-	}
-	if len(b) == 1 {
-		return 1
-	}
-	if b[1] == 0x1b {
-		// ESC ESC ... (e.g. \x1b\x1b[C for Alt+Right on macOS)
-		if len(b) >= 3 && b[2] == '[' {
-			for i := 3; i < len(b); i++ {
-				if b[i] >= 0x40 && b[i] <= 0x7E {
-					return i + 1
-				}
-			}
-			return len(b)
-		}
-		return 2
-	}
-	if b[1] == '[' {
-		// CSI sequence: \x1b[ ... finalByte (0x40-0x7E)
-		for i := 2; i < len(b); i++ {
-			if b[i] >= 0x40 && b[i] <= 0x7E {
-				return i + 1
-			}
-		}
-		return len(b)
-	}
-	if b[1] == 'O' {
-		// SS3 sequence: \x1bO <finalByte>
-		if len(b) >= 3 {
-			return 3
-		}
-		return len(b)
-	}
-	if b[1] == ']' {
-		// OSC sequence: \x1b] ... (\x07 or \x1b\)
-		for i := 2; i < len(b); i++ {
-			if b[i] == 0x07 {
-				return i + 1
-			}
-			if b[i] == 0x1b && i+1 < len(b) && b[i+1] == '\\' {
-				return i + 2
-			}
-		}
-		return len(b)
-	}
-	// 2-byte escape, e.g. \x1b1, \x1b2, etc.
-	return 2
+	return ParseEscapeSeq(b)
 }
 
 func (ui *ChatUI) handleUpArrow() {
@@ -1228,20 +1095,7 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			}
 
 			// 1c. Alt+Right / Ctrl+Enter / Alt+Enter / Ctrl+S submit sequences
-			if bytes.Equal(seq, []byte("\x1b[1;3C")) ||
-				bytes.Equal(seq, []byte("\x1b\x1b[C")) ||
-				bytes.Equal(seq, []byte("\x1b[13;5u")) ||
-				bytes.Equal(seq, []byte("\x1b[27;5;13~")) ||
-				bytes.Equal(seq, []byte("\x1b[10;5u")) ||
-				bytes.Equal(seq, []byte("\x1b[27;5;10~")) ||
-				bytes.Equal(seq, []byte("\x1b[10~")) ||
-				bytes.Equal(seq, []byte("\x1b[13~")) ||
-				bytes.Equal(seq, []byte("\x1b\r")) ||
-				bytes.Equal(seq, []byte("\x1b\n")) ||
-				bytes.Equal(seq, []byte("\x1b[115;5u")) ||
-				bytes.Equal(seq, []byte("\x1b[83;5u")) ||
-				bytes.Equal(seq, []byte("\x1b[27;5;115~")) ||
-				bytes.Equal(seq, []byte("\x1b[27;5;83~")) {
+			if IsSubmitKeySequence(seq) {
 				if ui.submitPrompt() {
 					return true
 				}
@@ -1355,47 +1209,17 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			if ui.Auto != nil && ui.Auto.Active {
 				cand := ui.Auto.SelectedCandidate()
 				if cand != "" && ui.PromptRow < len(ui.PromptLines) {
-					line := ui.PromptLines[ui.PromptRow]
-					lineRunes := []rune(line)
-					prefix := string(lineRunes[:ui.Auto.TriggerCol])
-					suffix := ""
-					if ui.PromptCol < len(lineRunes) {
-						suffix = string(lineRunes[ui.PromptCol:])
-					}
-
-					if ui.Auto.Mode == AutocompleteModeSlash {
-						inserted := cand + " "
-						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
-						ui.Auto.Dismiss()
-						ui.adjustPromptScroll()
-						continue
-					}
-
-					// File autocomplete
-					if strings.HasSuffix(cand, "/") {
-						// Onion peeling: directory selected
-						inserted := "@" + cand
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\""
-						}
-						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+					isSlash := (ui.Auto.Mode == AutocompleteModeSlash)
+					ui.PromptLines, ui.PromptCol = ApplyAutocompleteCandidate(
+						ui.PromptLines, ui.PromptRow, ui.PromptCol, ui.Auto.TriggerCol, cand, isSlash,
+					)
+					if !isSlash && strings.HasSuffix(cand, "/") {
 						ui.Auto.UpdateQuery(cand)
-						ui.adjustPromptScroll()
-						continue
 					} else {
-						// File selected
-						inserted := "@" + cand + " "
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\" "
-						}
-						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.Dismiss()
-						ui.adjustPromptScroll()
-						continue
 					}
+					ui.adjustPromptScroll()
+					continue
 				}
 				ui.Auto.Dismiss()
 				continue
@@ -1423,24 +1247,9 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 			if ui.Auto != nil && ui.Auto.Active {
 				cand := ui.Auto.SelectedCandidate()
 				if cand != "" && ui.PromptRow < len(ui.PromptLines) {
-					line := ui.PromptLines[ui.PromptRow]
-					lineRunes := []rune(line)
-					prefix := string(lineRunes[:ui.Auto.TriggerCol])
-					suffix := ""
-					if ui.PromptCol < len(lineRunes) {
-						suffix = string(lineRunes[ui.PromptCol:])
-					}
-
-					if ui.Auto.Mode == AutocompleteModeSlash {
-						if cand == "/btw" {
-							inserted := cand + " "
-							ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-							ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
-							ui.Auto.Dismiss()
-							ui.adjustPromptScroll()
-							continue
-						}
-						// Slash command selected with Enter: dispatch immediately!
+					isSlash := (ui.Auto.Mode == AutocompleteModeSlash)
+					if isSlash && cand != "/btw" {
+						// Slash command selected with Enter (except /btw): dispatch immediately!
 						ui.PromptLines[ui.PromptRow] = cand
 						ui.PromptCol = len([]rune(cand))
 						ui.Auto.Dismiss()
@@ -1449,30 +1258,16 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 						}
 						continue
 					}
-
-					// File autocomplete
-					if strings.HasSuffix(cand, "/") {
-						// Onion peeling: directory selected
-						inserted := "@" + cand
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\""
-						}
-						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+					ui.PromptLines, ui.PromptCol = ApplyAutocompleteCandidate(
+						ui.PromptLines, ui.PromptRow, ui.PromptCol, ui.Auto.TriggerCol, cand, isSlash,
+					)
+					if !isSlash && strings.HasSuffix(cand, "/") {
 						ui.Auto.UpdateQuery(cand)
-						ui.adjustPromptScroll()
-						continue
 					} else {
-						inserted := "@" + cand + " "
-						if strings.Contains(cand, " ") {
-							inserted = "@\"" + cand + "\" "
-						}
-						ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
-						ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
 						ui.Auto.Dismiss()
-						ui.adjustPromptScroll()
-						continue
 					}
+					ui.adjustPromptScroll()
+					continue
 				}
 				ui.Auto.Dismiss()
 				continue
@@ -1583,18 +1378,11 @@ func (ui *ChatUI) executeChatQuery(historyPrompt, queryPayload string, isBTW boo
 	ui.IsStreamingBTW = isBTW
 	ui.StreamContent.Reset()
 
-	var apiMessages []Message
-	activePrompt := systemPrompt
-	if ui.Opts.IsCodeGen {
-		activePrompt = codePrompt
+	var history []Message
+	if ui.Session != nil {
+		history = ui.Session.Messages
 	}
-	apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
-
-	if ui.Session != nil && len(ui.Session.Messages) > 0 {
-		compacted := compactHistory(ui.Session.Messages)
-		apiMessages = append(apiMessages, compacted...)
-	}
-	apiMessages = append(apiMessages, Message{Role: "user", Content: queryPayload})
+	apiMessages := buildAPIMessages(ui.Opts.IsCodeGen, history, queryPayload)
 
 	queryCtx, cancel := context.WithCancel(context.Background())
 	ui.ActiveCancel = cancel
