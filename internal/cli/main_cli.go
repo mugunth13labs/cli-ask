@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	version = "0.7.2"
+	version = "0.7.4"
 )
 
 var codeFileExts = map[string]bool{
@@ -32,6 +32,7 @@ type ParsedArgs struct {
 	CodeGen    bool   // pure code generation mode (--cg / --codegen)
 	Prompt     string // collected prompt tokens
 	UseContext bool   // true unless --no-context is provided
+	IsBtw      bool   // true if --btw is provided (reads past context, but does not save to session)
 }
 
 func parseCLIArgs(args []string) ParsedArgs {
@@ -65,13 +66,10 @@ func parseCLIArgs(args []string) ParsedArgs {
 		case "-i", "--chatbot":
 			result.Action = "chatbot"
 			return result
-		case "--ghost-complete", "--toggle-ghost-complete", "--toggle-ghost":
-			result.Action = "toggle-ghost"
-			return result
-		case "--install-ghost-complete", "--install-shell-ghost":
+		case "--summon-ghost", "--raise-ghost", "--install-shell-ghost":
 			result.Action = "install-shell-ghost"
 			return result
-		case "--uninstall-ghost-complete", "--uninstall-shell-ghost":
+		case "--slay-ghost", "--uninstall-shell-ghost":
 			result.Action = "uninstall-shell-ghost"
 			return result
 		case "--uninstall-self", "--uninstall":
@@ -98,7 +96,7 @@ func parseCLIArgs(args []string) ParsedArgs {
 		}
 		return result
 	}
-	if args[0] == "--complete" || args[0] == "--suggest" || args[0] == "--ghost-complete" {
+	if args[0] == "--complete" || args[0] == "--suggest" {
 		result.Action = "complete"
 		if len(args) > 1 {
 			result.ActionArg = strings.Join(args[1:], " ")
@@ -132,6 +130,10 @@ func parseCLIArgs(args []string) ParsedArgs {
 			}
 			if arg == "--no-context" {
 				result.UseContext = false
+				continue
+			}
+			if arg == "--btw" {
+				result.IsBtw = true
 				continue
 			}
 			if arg == "-cg" || arg == "--cg" || arg == "--codegen" {
@@ -281,11 +283,13 @@ Chatbot Mode:
 
 Session Memory:
   ask --clear, -c               Clear current terminal's conversation history
-  ask --no-context <prompt>     Run query without reading or updating session history
+  ask --btw <prompt>            Run tangent query using past context without updating session
+  ask --no-context <prompt>     Run query with total amnesia (neither reads nor saves history)
 
 Ghost-Complete (AI Shell Autocompletion):
-  ask --ghost-complete          Toggle AI ghost-complete in shell profile (Alt+RightArrow)
-  ask --complete <line>         Headless query for single-line command completion
+  ask --summon-ghost, --raise-ghost  Install and enable Ghost-Complete in shell profile
+  ask --slay-ghost                   Disable and remove Ghost-Complete from shell profile
+  ask --complete <line>              Headless query for single-line command completion
 
 Configuration:
   ask --set-key <key>           Save OpenRouter API key
@@ -348,9 +352,9 @@ func Run(cmdArgs []string) {
 		fmt.Printf("Model:   %s\n", cfg.Model)
 		fmt.Printf("API Key: %s\n", maskedKey)
 		fmt.Printf("Session: %s\n", getSessionID())
-		ghostStatus := "Disabled (run: ask --ghost-complete)"
+		ghostStatus := "Disabled (run: ask --summon-ghost)"
 		if installed, _, _ := IsShellGhostInstalled(); installed {
-			ghostStatus = "Enabled (Trigger: Alt+RightArrow)"
+			ghostStatus = "Enabled (Trigger: Alt+RightArrow | to disable: ask --slay-ghost)"
 		}
 		fmt.Printf("Ghost-Complete: %s\n", ghostStatus)
 		sysCtx := GetActiveSystemContext()
@@ -564,7 +568,7 @@ func Run(cmdArgs []string) {
 		os.Exit(1)
 	}
 
-	if parsed.UseContext && currentSession != nil && response != "" {
+	if parsed.UseContext && !parsed.IsBtw && currentSession != nil && response != "" {
 		historyPrompt := FormatHistoryPrompt(userPrompt, attachments)
 		currentSession.Messages = append(currentSession.Messages,
 			Message{Role: "user", Content: historyPrompt},

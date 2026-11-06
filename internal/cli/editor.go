@@ -617,29 +617,6 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 						suffix = string(lineRunes[editor.CursorCol:])
 					}
 
-					if auto.Mode == AutocompleteModeSlash {
-						if buf[0] == 13 || (n == 1 && buf[0] == 10) {
-							// Enter on slash command: dispatch immediately
-							editor.Lines[editor.CursorRow] = cand
-							editor.CursorCol = len([]rune(cand))
-							auto.Dismiss()
-							clearBox()
-							lower := strings.ToLower(cand)
-							if lower == "/exit" || lower == "/quit" || lower == "/q" {
-								return "", true, nil
-							}
-							return cand, false, nil
-						} else {
-							// Tab: complete command name
-							inserted := cand + " "
-							editor.Lines[editor.CursorRow] = prefix + inserted + suffix
-							editor.CursorCol = auto.TriggerCol + len([]rune(inserted))
-							auto.Dismiss()
-							renderBox()
-							continue
-						}
-					}
-
 					if strings.HasSuffix(cand, "/") {
 						// Onion peeling: directory selected
 						inserted := "@" + cand
@@ -723,18 +700,6 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 			continue
 		}
 
-		// When autocomplete is NOT active, typing single '/' at start of line invokes slash commands
-		if !auto.Active && n == 1 && buf[0] == '/' {
-			line := editor.Lines[editor.CursorRow]
-			prefix := strings.TrimSpace(string([]rune(line)[:editor.CursorCol]))
-			if prefix == "" {
-				editor.InsertChar('/')
-				auto.TriggerSlash(editor.CursorRow, editor.CursorCol-1)
-				renderBox()
-				continue
-			}
-		}
-
 		// When autocomplete is NOT active, typing single '@' invokes it
 		if !auto.Active && n == 1 && buf[0] == '@' {
 			editor.InsertChar('@')
@@ -750,11 +715,6 @@ func runInlineComposer(targetDesc string) (string, bool, error) {
 		}
 		if shouldSubmit {
 			content := editor.Content()
-			lower := strings.ToLower(content)
-			if lower == "/exit" || lower == "/quit" || lower == "/q" {
-				clearBox()
-				return "", true, nil
-			}
 
 			// Clear the composer box and print clean prompt lines into terminal history
 			clearBox()

@@ -19,10 +19,19 @@ const (
 	RegionHistory ChatRegion = 1
 )
 
+type ConfirmKind int
+
+const (
+	ConfirmNone  ConfirmKind = 0
+	ConfirmExit  ConfirmKind = 1
+	ConfirmClear ConfirmKind = 2
+)
+
 type ChatTurn struct {
 	Role      string
 	Content   string
 	Timestamp string // "15:04:05"
+	IsBTW     bool   // true for ephemeral aside queries
 }
 
 type HistLine struct {
@@ -73,9 +82,14 @@ type ChatUI struct {
 	SelEndR   int
 	SelEndC   int
 
-	IsStreaming   bool
-	ActiveCancel  context.CancelFunc
-	StreamContent strings.Builder
+	IsStreaming    bool
+	IsStreamingBTW bool
+	ActiveCancel   context.CancelFunc
+	StreamContent  strings.Builder
+
+	// Confirmation modal state
+	ConfirmState  ConfirmKind
+	ConfirmChoice int // 0 = Yes, 1 = No
 
 	// Toast notification
 	ToastMessage string
@@ -250,12 +264,17 @@ func (ui *ChatUI) rebuildReversedLines() {
 	if ui.IsStreaming {
 		// Static right-aligned "generating" (no animated dots)
 		label := "generating"
+		bannerKind := "LEAN_LINE"
+		if ui.IsStreamingBTW {
+			label = "btw generating"
+			bannerKind = "BTW_LEAN_LINE"
+		}
 		rem := contentWidth - len([]rune(label)) - 1
 		if rem < 0 {
 			rem = 0
 		}
 		streamHeader := strings.Repeat("─", rem) + " " + label
-		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: "LEAN_LINE", EndsWithNewline: true})
+		ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: streamHeader, IsBanner: true, BannerKind: bannerKind, EndsWithNewline: true})
 
 		wrapped := wrapTextLines(ui.StreamContent.String(), contentWidth)
 		for _, w := range wrapped {
@@ -271,17 +290,23 @@ func (ui *ChatUI) rebuildReversedLines() {
 	for i := len(ui.Turns) - 1; i >= 0; i-- {
 		turn := ui.Turns[i]
 		if turn.Role == "assistant" {
-			// Lean top bar: right-aligned timestamp "hh:mm:ss" (strictly nothing more)
+			// Lean top bar: right-aligned timestamp "hh:mm:ss"
 			ts := turn.Timestamp
 			if ts == "" {
 				ts = time.Now().Format("15:04:05")
 			}
-			rem := contentWidth - len([]rune(ts)) - 1
+			headerLabel := ts
+			bannerKind := "LEAN_LINE"
+			if turn.IsBTW {
+				headerLabel = "btw " + ts
+				bannerKind = "BTW_LEAN_LINE"
+			}
+			rem := contentWidth - len([]rune(headerLabel)) - 1
 			if rem < 0 {
 				rem = 0
 			}
-			startHeader := strings.Repeat("─", rem) + " " + ts
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startHeader, IsBanner: true, BannerKind: "LEAN_LINE", EndsWithNewline: true})
+			startHeader := strings.Repeat("─", rem) + " " + headerLabel
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startHeader, IsBanner: true, BannerKind: bannerKind, EndsWithNewline: true})
 
 			wrapped := wrapTextLines(turn.Content, contentWidth)
 			for _, w := range wrapped {
@@ -298,12 +323,17 @@ func (ui *ChatUI) rebuildReversedLines() {
 				ts = time.Now().Format("15:04:05")
 			}
 			headerText := "─ prompt " + ts + " "
+			bannerKind := "USER_LINE"
+			if turn.IsBTW {
+				headerText = "─ btw " + ts + " "
+				bannerKind = "BTW_USER_LINE"
+			}
 			rem := contentWidth - len([]rune(headerText))
 			if rem < 0 {
 				rem = 0
 			}
 			startLine := headerText + strings.Repeat("─", rem)
-			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: "USER_LINE", EndsWithNewline: true})
+			ui.ReversedLines = append(ui.ReversedLines, HistLine{Text: startLine, IsBanner: true, BannerKind: bannerKind, EndsWithNewline: true})
 
 			wrapped := wrapTextLines(turn.Content, contentWidth)
 			for _, w := range wrapped {
@@ -463,9 +493,21 @@ func (ui *ChatUI) RenderRow(r int) string {
 				sb.WriteString(string(rawRunes))
 				sb.WriteString(strings.Repeat("─", rem))
 				sb.WriteString("\x1b[0m")
+			case "BTW_LEAN_LINE":
+				// BTW tangent rule in soft purple (\x1b[38;5;141m)
+				sb.WriteString("\x1b[38;5;141m")
+				sb.WriteString(string(rawRunes))
+				sb.WriteString(strings.Repeat("─", rem))
+				sb.WriteString("\x1b[0m")
 			case "USER_LINE":
 				// User line in warm amber (\x1b[38;5;214m)
 				sb.WriteString("\x1b[38;5;214m")
+				sb.WriteString(string(rawRunes))
+				sb.WriteString(strings.Repeat("─", rem))
+				sb.WriteString("\x1b[0m")
+			case "BTW_USER_LINE":
+				// BTW tangent prompt line in soft purple (\x1b[38;5;141m)
+				sb.WriteString("\x1b[38;5;141m")
 				sb.WriteString(string(rawRunes))
 				sb.WriteString(strings.Repeat("─", rem))
 				sb.WriteString("\x1b[0m")
@@ -920,7 +962,12 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		return false
 	}
 	if fullPrompt == "/exit" || fullPrompt == "/quit" || fullPrompt == "/q" {
-		return true
+		ui.ConfirmState = ConfirmExit
+		ui.ConfirmChoice = 0
+		if ui.Auto != nil {
+			ui.Auto.Dismiss()
+		}
+		return false
 	}
 	if fullPrompt == "/help" || fullPrompt == "/?" {
 		ui.PromptLines = []string{""}
@@ -928,6 +975,7 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		ui.PromptCol = 0
 		ui.PromptScroll = 0
 		helpContent := "ask chat commands:\n" +
+			"  /btw <question>    Ask a tangent with context without saving to history\n" +
 			"  /clear, /c         Clear chat history & session context\n" +
 			"  /help, /?          Show this help message\n" +
 			"  /exit, /quit, /q   Exit ask chat\n\n" +
@@ -947,23 +995,37 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		return false
 	}
 	if fullPrompt == "/clear" || fullPrompt == "/c" {
+		ui.ConfirmState = ConfirmClear
+		ui.ConfirmChoice = 0
 		if ui.Auto != nil {
 			ui.Auto.Dismiss()
-		}
-		ui.Turns = []ChatTurn{}
-		ui.PromptLines = []string{""}
-		ui.PromptRow = 0
-		ui.PromptCol = 0
-		ui.rebuildReversedLines()
-		if ui.Session != nil {
-			ui.Session.Messages = []Message{}
-			_ = saveSession(ui.Session)
 		}
 		return false
 	}
 
 	if ui.Auto != nil {
 		ui.Auto.Dismiss()
+	}
+
+	isBTW := false
+	if fullPrompt == "/btw" || strings.HasPrefix(fullPrompt, "/btw ") || strings.HasPrefix(fullPrompt, "/btw\n") {
+		isBTW = true
+		actualQuery := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(fullPrompt, "/btw"), "\n"))
+		if actualQuery == "" {
+			ui.PromptLines = []string{""}
+			ui.PromptRow = 0
+			ui.PromptCol = 0
+			ui.PromptScroll = 0
+			usageContent := "Usage: /btw <question>\nAsk a quick tangent using past context without saving to conversation history."
+			nowTs := time.Now().Format("15:04:05")
+			ui.Turns = append(ui.Turns,
+				ChatTurn{Role: "user", Content: "/btw", Timestamp: nowTs, IsBTW: true},
+				ChatTurn{Role: "assistant", Content: usageContent, Timestamp: nowTs, IsBTW: true},
+			)
+			ui.rebuildReversedLines()
+			return false
+		}
+		fullPrompt = actualQuery
 	}
 
 	// Check for @filename references and resolve attachments
@@ -979,8 +1041,8 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 		if err != nil {
 			nowTs := time.Now().Format("15:04:05")
 			ui.Turns = append(ui.Turns,
-				ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs},
-				ChatTurn{Role: "assistant", Content: err.Error(), Timestamp: nowTs},
+				ChatTurn{Role: "user", Content: fullPrompt, Timestamp: nowTs, IsBTW: isBTW},
+				ChatTurn{Role: "assistant", Content: err.Error(), Timestamp: nowTs, IsBTW: isBTW},
 			)
 			ui.PromptLines = []string{""}
 			ui.PromptRow = 0
@@ -995,13 +1057,13 @@ func (ui *ChatUI) submitPrompt() (shouldExit bool) {
 
 	historyPrompt := FormatHistoryPrompt(fullPrompt, attachments)
 	nowTs := time.Now().Format("15:04:05")
-	ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: historyPrompt, Timestamp: nowTs})
+	ui.Turns = append(ui.Turns, ChatTurn{Role: "user", Content: historyPrompt, Timestamp: nowTs, IsBTW: isBTW})
 	ui.PromptLines = []string{""}
 	ui.PromptRow = 0
 	ui.PromptCol = 0
 	ui.PromptScroll = 0
 	ui.rebuildReversedLines()
-	go ui.executeChatQuery(historyPrompt, queryPayload)
+	go ui.executeChatQuery(historyPrompt, queryPayload, isBTW)
 	return false
 }
 
@@ -1017,6 +1079,79 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 	offset := 0
 	for offset < len(inBuf) {
 		chunk := inBuf[offset:]
+
+		// Modal Confirmation handling (for /exit, /clear, Ctrl+C)
+		if ui.ConfirmState != ConfirmNone {
+			// Ctrl+C -> force exit immediately
+			if chunk[0] == 3 {
+				return true
+			}
+			// Escape key -> cancel confirmation
+			if chunk[0] == 27 && (len(chunk) == 1 || (len(chunk) > 1 && chunk[1] != '[' && chunk[1] != 'O')) {
+				ui.ConfirmState = ConfirmNone
+				offset++
+				continue
+			}
+			// Arrow Left or Right (CSI or SS3) -> toggle choice
+			if bytes.HasPrefix(chunk, []byte("\x1b[D")) || bytes.HasPrefix(chunk, []byte("\x1bOD")) ||
+				bytes.HasPrefix(chunk, []byte("\x1b[C")) || bytes.HasPrefix(chunk, []byte("\x1bOC")) {
+				ui.ConfirmChoice = 1 - ui.ConfirmChoice
+				seqLen := parseEscapeSeq(chunk)
+				offset += seqLen
+				continue
+			}
+			// Enter key -> confirm choice
+			if chunk[0] == 13 || chunk[0] == 10 {
+				if ui.ConfirmChoice == 0 { // Yes
+					if ui.ConfirmState == ConfirmExit {
+						return true
+					}
+					if ui.ConfirmState == ConfirmClear {
+						ui.Turns = []ChatTurn{}
+						ui.PromptLines = []string{""}
+						ui.PromptRow = 0
+						ui.PromptCol = 0
+						ui.rebuildReversedLines()
+						if ui.Session != nil {
+							ui.Session.Messages = []Message{}
+							_ = saveSession(ui.Session)
+						}
+						ui.ConfirmState = ConfirmNone
+						ui.showToastLocked("Chat history cleared")
+						offset++
+						if chunk[0] == 13 && offset < len(inBuf) && inBuf[offset] == 10 {
+							offset++
+						}
+						continue
+					}
+				} else { // No
+					ui.ConfirmState = ConfirmNone
+					offset++
+					if chunk[0] == 13 && offset < len(inBuf) && inBuf[offset] == 10 {
+						offset++
+					}
+					continue
+				}
+			}
+			// Ignore any other keys while confirmation modal is active
+			if chunk[0] == 0x1b {
+				offset += parseEscapeSeq(chunk)
+			} else {
+				offset++
+			}
+			continue
+		}
+
+		// When not in confirm modal, handle Ctrl+C (0x03)
+		if chunk[0] == 3 {
+			offset++
+			if ui.IsStreaming && ui.ActiveCancel != nil {
+				ui.ActiveCancel()
+				ui.ActiveCancel = nil
+				continue
+			}
+			return true
+		}
 
 		// 1. Escape Sequence Handler
 		if chunk[0] == 0x1b {
@@ -1297,6 +1432,14 @@ func (ui *ChatUI) HandleKey(inBuf []byte) (shouldExit bool) {
 					}
 
 					if ui.Auto.Mode == AutocompleteModeSlash {
+						if cand == "/btw" {
+							inserted := cand + " "
+							ui.PromptLines[ui.PromptRow] = prefix + inserted + suffix
+							ui.PromptCol = ui.Auto.TriggerCol + len([]rune(inserted))
+							ui.Auto.Dismiss()
+							ui.adjustPromptScroll()
+							continue
+						}
 						// Slash command selected with Enter: dispatch immediately!
 						ui.PromptLines[ui.PromptRow] = cand
 						ui.PromptCol = len([]rune(cand))
@@ -1434,9 +1577,10 @@ func (ui *ChatUI) clampPromptCol() {
 	}
 }
 
-func (ui *ChatUI) executeChatQuery(historyPrompt, queryPayload string) {
+func (ui *ChatUI) executeChatQuery(historyPrompt, queryPayload string, isBTW bool) {
 	ui.mu.Lock()
 	ui.IsStreaming = true
+	ui.IsStreamingBTW = isBTW
 	ui.StreamContent.Reset()
 
 	var apiMessages []Message
@@ -1485,18 +1629,21 @@ func (ui *ChatUI) executeChatQuery(historyPrompt, queryPayload string) {
 
 	ui.mu.Lock()
 	ui.IsStreaming = false
+	ui.IsStreamingBTW = false
 	ui.ActiveCancel = nil
 
 	nowTs := time.Now().Format("15:04:05")
 	if response != "" {
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: response, Timestamp: nowTs})
-		ui.Session.Messages = append(ui.Session.Messages,
-			Message{Role: "user", Content: historyPrompt},
-			Message{Role: "assistant", Content: response},
-		)
-		_ = saveSession(ui.Session)
+		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: response, Timestamp: nowTs, IsBTW: isBTW})
+		if !isBTW && ui.Session != nil {
+			ui.Session.Messages = append(ui.Session.Messages,
+				Message{Role: "user", Content: historyPrompt},
+				Message{Role: "assistant", Content: response},
+			)
+			_ = saveSession(ui.Session)
+		}
 	} else if queryErr != nil && queryErr != context.Canceled {
-		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: fmt.Sprintf("[Error: %v]", queryErr), Timestamp: nowTs})
+		ui.Turns = append(ui.Turns, ChatTurn{Role: "assistant", Content: fmt.Sprintf("[Error: %v]", queryErr), Timestamp: nowTs, IsBTW: isBTW})
 	}
 	ui.StreamContent.Reset()
 	ui.rebuildReversedLines()

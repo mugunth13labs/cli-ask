@@ -1,3 +1,20 @@
+cli-ask (0.7.4-1) unstable; urgency=medium
+
+  * Replace --ghost-complete with thematic flags: --summon-ghost and --raise-ghost to install and enable Ghost-Complete in shell profiles.
+  * Add --slay-ghost to disable and uninstall shell Ghost-Complete hooks.
+  * Display a structured warning and usage guide upon summoning Ghost-Complete.
+  * Strict removal of legacy --ghost-complete flags.
+
+ -- Mugunthan Mohan <mugunthan13labs@gmail.com>  Fri, 06 Nov 2026 20:00:00 +0800
+
+cli-ask (0.7.3-1) unstable; urgency=medium
+
+  * Add --btw (CLI) and /btw (interactive ChatUI) for conversational tangents using read-only past context without polluting future turns.
+  * Require explicit user confirmation before executing /exit or /clear in interactive mode.
+  * Display divider toast feedback upon confirmed chat history clearance.
+
+ -- Mugunthan Mohan <mugunthan13labs@gmail.com>  Fri, 06 Nov 2026 18:00:00 +0800
+
 cli-ask (0.7.2-1) unstable; urgency=medium
 
   * Bug fixes and performance improvements.

@@ -21,7 +21,8 @@ func isChatCommand(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	if lower == "/exit" || lower == "/quit" || lower == "/q" ||
 		lower == "/clear" || lower == "/c" ||
-		lower == "/help" || lower == "/?" {
+		lower == "/help" || lower == "/?" ||
+		lower == "/btw" || strings.HasPrefix(lower, "/btw ") {
 		return true
 	}
 	return false
@@ -125,11 +126,21 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 	amber := "\x1b[38;5;214m"
 	reset := "\x1b[0m"
 
-	if confirmExit {
-		prompt := " Exit ask chat?  "
+	isConfirm := confirmExit
+	choice := exitChoice
+	prompt := " Exit ask chat?  "
+	if chat != nil && chat.ConfirmState != ConfirmNone {
+		isConfirm = true
+		choice = chat.ConfirmChoice
+		if chat.ConfirmState == ConfirmClear {
+			prompt = " Clear chat history?  "
+		}
+	}
+
+	if isConfirm {
 		yes := " [ Yes ] "
 		no := " [ No ] "
-		if exitChoice == 0 {
+		if choice == 0 {
 			yes = amber + "\x1b[7;1m Yes " + reset + navyBg + white
 			no = "  No  "
 		} else {
@@ -154,7 +165,7 @@ func renderStandaloneHeader(width int, confirmExit bool, exitChoice int, chat *C
 		hints = "↑/↓: Browse | Shift+Arrows: Select | ↑: Prompt "
 	} else {
 		// In Prompt composer
-		hints = "Alt+→: Send | /help /clear /exit | Ctrl+C: Exit "
+		hints = "Alt+→: Send | /help /btw /clear /exit | Ctrl+C: Exit "
 		if width < 85 {
 			hints = "Alt+→: Send | / commands | Ctrl+C: Exit "
 		}
@@ -230,8 +241,6 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 
 	var renderMu sync.Mutex
 	curW, curH := w, h
-	confirmExit := false
-	exitChoice := 0 // 0 = Yes, 1 = No
 
 	render := func() {
 		renderMu.Lock()
@@ -242,7 +251,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 
 		// 1. Row 1: Header bar
 		sb.WriteString("\x1b[1;1H\x1b[K")
-		sb.WriteString(renderStandaloneHeader(curW, confirmExit, exitChoice, chat))
+		sb.WriteString(renderStandaloneHeader(curW, false, 0, chat))
 
 		// 2. Row 2: Divider line
 		sb.WriteString("\x1b[2;1H\x1b[K")
@@ -258,7 +267,7 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 		cRow, cCol := chat.CursorPosition()
 		screenRow := cRow + 3
 		screenCol := cCol + 1
-		if screenRow >= 3 && screenRow <= curH && screenCol >= 1 && screenCol <= curW && !confirmExit {
+		if screenRow >= 3 && screenRow <= curH && screenCol >= 1 && screenCol <= curW && chat.ConfirmState == ConfirmNone {
 			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", screenRow, screenCol, ansiShowCursor))
 		}
 
@@ -363,54 +372,16 @@ func runChatUIStandalone(cfg *Config, initialPrompt string, opts QueryOptions) e
 			continue
 		}
 
-		// Exit Confirmation Mode handling
-		if confirmExit {
-			// Left or Right arrow: toggle Yes / No
-			if bytes.Equal(inBuf, []byte("\x1b[D")) || bytes.Equal(inBuf, []byte("\x1b[C")) {
-				exitChoice = 1 - exitChoice
-				render()
-				continue
-			}
-			// Enter key: confirm choice
-			isEnter := (len(inBuf) == 1 && inBuf[0] == 13) || bytes.Equal(inBuf, []byte("\r\n"))
-			if isEnter {
-				if exitChoice == 0 {
-					// Confirmed Yes -> Exit
-					isExiting = true
-					return nil
-				}
-				// Confirmed No -> Cancel confirmation
-				confirmExit = false
-				render()
-				continue
-			}
-			// Esc key: cancel confirmation
-			if len(inBuf) == 1 && inBuf[0] == 27 {
-				confirmExit = false
-				render()
-				continue
-			}
-			// Ctrl+C: force exit immediately
-			if len(inBuf) == 1 && inBuf[0] == 3 {
-				isExiting = true
-				return nil
-			}
-			// Ignore other keys while in confirmation mode
-			continue
-		}
-
-		// When NOT in confirmExit:
-		// Intercept Ctrl+C (0x03)
-		if len(inBuf) == 1 && inBuf[0] == 3 {
+		// When not in confirm modal, Ctrl+C prompts for exit confirmation
+		if len(inBuf) == 1 && inBuf[0] == 3 && chat.ConfirmState == ConfirmNone {
 			if chat.IsStreaming && chat.ActiveCancel != nil {
 				chat.ActiveCancel()
 				chat.ActiveCancel = nil
 				render()
 				continue
 			}
-			// Prompt for exit!
-			confirmExit = true
-			exitChoice = 0 // default Yes
+			chat.ConfirmState = ConfirmExit
+			chat.ConfirmChoice = 0
 			render()
 			continue
 		}
@@ -560,25 +531,63 @@ func runChatbot(cfg *Config, initialPrompt string, opts QueryOptions) error {
 		// Plain words like "exit" or "quit" without slash are passed to the model as literal text!
 		lower := strings.ToLower(input)
 		if lower == "/exit" || lower == "/quit" || lower == "/q" {
-			break
+			fmt.Print("Exit ask chat? [y/N]: ")
+			ans, _ := reader.ReadString('\n')
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "y") {
+				break
+			}
+			continue
 		}
 
 		if lower == "/clear" || lower == "/c" {
-			_ = clearSession(sessionID)
-			session = &Session{
-				ID:       sessionID,
-				Messages: []Message{},
+			fmt.Print("Clear conversation memory? [y/N]: ")
+			ans, _ := reader.ReadString('\n')
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "y") {
+				_ = clearSession(sessionID)
+				session = &Session{
+					ID:       sessionID,
+					Messages: []Message{},
+				}
+				fmt.Printf("Session context cleared (%s).\n\n", sessionID)
 			}
-			fmt.Printf("Session context cleared (%s).\n\n", sessionID)
 			continue
 		}
 
 		if lower == "/help" || lower == "/?" {
 			fmt.Println(`Chat Mode Commands:
+  /btw <question>   Ask a tangent using past context without saving to history
   /clear, /c        Clear conversation memory for this session
   /help             Show this help message
   /exit, /quit, /q  Exit chat mode`)
 			fmt.Println()
+			continue
+		}
+
+		if strings.HasPrefix(lower, "/btw") {
+			btwQuery := strings.TrimSpace(input[len("/btw"):])
+			if btwQuery == "" {
+				fmt.Println("Usage: /btw <question> (Ask a quick tangent using past context without saving to history)")
+				fmt.Println()
+				continue
+			}
+			// Execute with past context, but do not save to session
+			activePrompt := systemPrompt
+			if opts.IsCodeGen {
+				activePrompt = codePrompt
+			}
+			var apiMessages []Message
+			apiMessages = append(apiMessages, Message{Role: "system", Content: activePrompt})
+			if session != nil && len(session.Messages) > 0 {
+				compacted := compactHistory(session.Messages)
+				apiMessages = append(apiMessages, compacted...)
+			}
+			apiMessages = append(apiMessages, Message{Role: "user", Content: btwQuery})
+			queryCtx := context.Background()
+			response, queryErr := queryOpenRouter(queryCtx, cfg, apiMessages, opts)
+			if queryErr != nil {
+				fmt.Printf("\nError: %v\n", queryErr)
+			}
+			_ = response
 			continue
 		}
 

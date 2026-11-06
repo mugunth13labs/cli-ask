@@ -338,6 +338,7 @@ type SlashCommandItem struct {
 // DefaultSlashCommands lists the standard interactive chatbot slash commands.
 var DefaultSlashCommands = []SlashCommandItem{
 	{Name: "/help", Description: "Show available commands & keys"},
+	{Name: "/btw", Description: "Ask a tangent with context without saving"},
 	{Name: "/clear", Description: "Clear conversation history"},
 	{Name: "/exit", Description: "Exit interactive chat session"},
 }

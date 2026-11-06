@@ -227,9 +227,36 @@ func getManagedScriptInfo(shellType string) (filename, content, profileLine stri
 	return filename, content, profileLine
 }
 
-func printSafetyWarning() {
-	fmt.Println("\x1b[1;38;5;214m[!] Safety Warning:\x1b[0m AI-generated commands can be unpredictable or destructive.")
-	fmt.Println("    Always inspect the completed command before pressing Enter to execute.")
+func printGhostSummonedBanner(shellType, profilePath string) {
+	cyan := "\x1b[38;5;39m"
+	amber := "\x1b[38;5;214m"
+	green := "\x1b[38;5;46m"
+	bold := "\x1b[1m"
+	reset := "\x1b[0m"
+
+	reloadCmd := fmt.Sprintf("source %s", profilePath)
+	if shellType == "powershell" {
+		reloadCmd = ". $PROFILE"
+	}
+
+	fmt.Printf("%s%s┌─ Ghost-Complete: Summoned %s[✓]%s%s ────────────────────────────────────────┐%s\n", cyan, bold, green, reset, cyan, reset)
+	fmt.Printf("%s│%s                                                                            %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s  %s%s[!] Safety Warning:%s                                                       %s│%s\n", cyan, reset, amber, bold, reset, cyan, reset)
+	fmt.Printf("%s│%s      AI-generated shell commands can be unpredictable or destructive.      %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s      Always inspect the completed command carefully before pressing Enter. %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s                                                                            %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s  %sHow to use:%s                                                               %s│%s\n", cyan, reset, bold, reset, cyan, reset)
+	fmt.Printf("%s│%s      1. Type a command prefix (e.g. 'docker run ') or an intent comment    %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s         (e.g. '# list all listening ports') on your terminal command line. %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s      2. Press %sAlt+RightArrow%s (%sAlt+→%s) to summon the ghost autocomplete.     %s│%s\n", cyan, reset, green, reset, green, reset, cyan, reset)
+	fmt.Printf("%s│%s                                                                            %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s  %sActivate now:%s                                                             %s│%s\n", cyan, reset, bold, reset, cyan, reset)
+	fmt.Printf("%s│%s      Restart your shell session or run:                                    %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s      %s%-68s%s %s│%s\n", cyan, reset, green, reloadCmd, reset, cyan, reset)
+	fmt.Printf("%s│%s                                                                            %s│%s\n", cyan, reset, cyan, reset)
+	fmt.Printf("%s│%s  %sTo disable:%s                                                               %s│%s\n", cyan, reset, bold, reset, cyan, reset)
+	fmt.Printf("%s│%s      Run: %sask --slay-ghost%s                                                 %s│%s\n", cyan, reset, amber, reset, cyan, reset)
+	fmt.Printf("%s└────────────────────────────────────────────────────────────────────────────┘%s\n", cyan, reset)
 }
 
 // InstallShellGhost writes the hook script and appends a single reference line to the shell profile.
@@ -276,13 +303,7 @@ func InstallShellGhost() error {
 		return fmt.Errorf("failed to update profile %s: %w", profilePath, err)
 	}
 
-	printSafetyWarning()
-	fmt.Println("\x1b[1;32m[✓] Ghost-Complete: Enabled\x1b[0m (Trigger: Alt+RightArrow)")
-	if shellType == "powershell" {
-		fmt.Println("Restart your PowerShell session or run: . $PROFILE")
-	} else {
-		fmt.Printf("Restart your shell or run: source %s\n", profilePath)
-	}
+	printGhostSummonedBanner(shellType, profilePath)
 	return nil
 }
 
@@ -339,7 +360,7 @@ func UninstallShellGhost() error {
 	scriptFilePath := filepath.Join(home, ".config", "ask", "scripts", filename)
 	_ = os.Remove(scriptFilePath)
 
-	fmt.Println("[○] Ghost-Complete: Disabled")
+	fmt.Println("[○] Ghost slain! Ghost-Complete has been disabled and removed.")
 	fmt.Println("Changes will take effect in new shells, or restart your current session.")
 	return nil
 }

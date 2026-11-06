@@ -343,8 +343,14 @@ func TestSlashCommandDropdownAutocomplete(t *testing.T) {
 		t.Fatalf("expected active slash autocomplete, got active=%v mode=%v", auto.Active, auto.Mode)
 	}
 
-	if len(auto.Candidates) != 3 {
-		t.Fatalf("expected 3 standard slash commands (/help, /clear, /exit), got %d (%v)", len(auto.Candidates), auto.Candidates)
+	if len(auto.Candidates) != 4 {
+		t.Fatalf("expected 4 standard slash commands (/help, /btw, /clear, /exit), got %d (%v)", len(auto.Candidates), auto.Candidates)
+	}
+
+	// Filter query: 'b' -> matches /btw
+	auto.UpdateQuery("b")
+	if len(auto.Candidates) != 1 || auto.Candidates[0] != "/btw" {
+		t.Fatalf("expected '/btw' to match 'b', got %v", auto.Candidates)
 	}
 
 	// Filter query: 'h' -> matches /help

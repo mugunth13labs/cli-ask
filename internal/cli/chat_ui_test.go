@@ -286,7 +286,7 @@ func TestStandaloneHeaderBarAndExitConfirmation(t *testing.T) {
 	if !strings.Contains(header, "ask chat") {
 		t.Fatalf("expected header to contain 'ask chat', got: %q", header)
 	}
-	if !strings.Contains(header, "Alt+→") || !strings.Contains(header, "/help /clear /exit") {
+	if !strings.Contains(header, "Alt+→") || !strings.Contains(header, "/help /btw /clear /exit") {
 		t.Fatalf("expected header to contain slash command hints, got: %q", header)
 	}
 
@@ -691,5 +691,127 @@ func TestOnionPeelingDirectoryTraversalInChatUI(t *testing.T) {
 	expected := "@src/app.go "
 	if chat.PromptLines[0] != expected {
 		t.Fatalf("expected prompt %q, got %q", expected, chat.PromptLines[0])
+	}
+}
+
+func TestChatUIExitConfirmation(t *testing.T) {
+	cfg := &Config{Model: "gpt-4"}
+	chat := NewChatUI(cfg, nil, QueryOptions{}, "", 80, 24)
+
+	// 1. Submitting /exit activates confirmation mode (does not exit immediately)
+	chat.PromptLines = []string{"/exit"}
+	shouldExit := chat.submitPrompt()
+	if shouldExit {
+		t.Fatal("expected /exit to NOT exit immediately, but require confirmation")
+	}
+	if chat.ConfirmState != ConfirmExit || chat.ConfirmChoice != 0 {
+		t.Fatalf("expected ConfirmExit with choice 0 (Yes), got state=%v choice=%d", chat.ConfirmState, chat.ConfirmChoice)
+	}
+
+	// 2. Pressing Esc cancels confirmation
+	chat.HandleKey([]byte{27})
+	if chat.ConfirmState != ConfirmNone {
+		t.Fatalf("expected ConfirmNone after Esc, got %v", chat.ConfirmState)
+	}
+
+	// 3. Submitting /exit again, toggling Right arrow selects No (choice 1)
+	chat.PromptLines = []string{"/exit"}
+	chat.submitPrompt()
+	chat.HandleKey([]byte("\x1b[C")) // Right arrow
+	if chat.ConfirmChoice != 1 {
+		t.Fatalf("expected choice 1 (No) after Right arrow, got %d", chat.ConfirmChoice)
+	}
+
+	// 4. Pressing Enter on No cancels confirmation
+	chat.HandleKey([]byte{13})
+	if chat.ConfirmState != ConfirmNone {
+		t.Fatalf("expected ConfirmNone after selecting No and pressing Enter, got %v", chat.ConfirmState)
+	}
+
+	// 5. Submitting /exit again, pressing Enter on Yes (choice 0) returns shouldExit = true
+	chat.PromptLines = []string{"/exit"}
+	chat.submitPrompt()
+	if chat.ConfirmChoice != 0 {
+		t.Fatalf("expected choice 0 (Yes), got %d", chat.ConfirmChoice)
+	}
+	exited := chat.HandleKey([]byte{13})
+	if !exited {
+		t.Fatal("expected HandleKey to return true when confirming Exit")
+	}
+}
+
+func TestChatUIClearConfirmationAndToast(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("ASK_CONFIG_DIR", tempDir)
+	cfg := &Config{Model: "gpt-4"}
+	session := &Session{ID: "test-sess", Messages: []Message{{Role: "user", Content: "prior context"}}}
+	chat := NewChatUI(cfg, session, QueryOptions{}, "", 80, 24)
+
+	if len(chat.Turns) == 0 {
+		t.Fatal("expected turns loaded from session")
+	}
+
+	// 1. Submitting /clear activates confirmation mode without wiping history
+	chat.PromptLines = []string{"/clear"}
+	chat.submitPrompt()
+	if chat.ConfirmState != ConfirmClear {
+		t.Fatalf("expected ConfirmClear, got %v", chat.ConfirmState)
+	}
+	if len(chat.Turns) == 0 {
+		t.Fatal("turns must NOT be cleared prior to confirmation")
+	}
+
+	// 2. Pressing Esc cancels confirmation without clearing
+	chat.HandleKey([]byte{27})
+	if chat.ConfirmState != ConfirmNone {
+		t.Fatalf("expected ConfirmNone after Esc, got %v", chat.ConfirmState)
+	}
+	if len(chat.Turns) == 0 {
+		t.Fatal("turns must remain intact after cancel")
+	}
+
+	// 3. Submitting /clear and confirming with Enter clears history and fires toast
+	chat.PromptLines = []string{"/clear"}
+	chat.submitPrompt()
+	chat.HandleKey([]byte{13}) // Enter on Yes
+	if len(chat.Turns) != 0 {
+		t.Fatalf("expected 0 turns after confirmed clear, got %d", len(chat.Turns))
+	}
+	if len(chat.Session.Messages) != 0 {
+		t.Fatalf("expected 0 session messages after confirmed clear, got %d", len(chat.Session.Messages))
+	}
+	if chat.ToastMessage != "Chat history cleared" {
+		t.Fatalf("expected toast 'Chat history cleared', got %q", chat.ToastMessage)
+	}
+}
+
+func TestChatUIBtwTangentBehavior(t *testing.T) {
+	cfg := &Config{Model: "gpt-4"}
+	session := &Session{ID: "test-sess", Messages: []Message{}}
+	chat := NewChatUI(cfg, session, QueryOptions{}, "", 80, 24)
+
+	// 1. Blank /btw displays usage turn without calling API
+	chat.PromptLines = []string{"/btw"}
+	chat.submitPrompt()
+	if len(chat.Turns) < 2 {
+		t.Fatalf("expected 2 turns (user + assistant usage hint), got %d", len(chat.Turns))
+	}
+	lastTurn := chat.Turns[len(chat.Turns)-1]
+	if !lastTurn.IsBTW {
+		t.Fatal("expected IsBTW to be true on usage turn")
+	}
+	if !strings.Contains(lastTurn.Content, "Usage: /btw <question>") {
+		t.Fatalf("expected usage hint in content, got %q", lastTurn.Content)
+	}
+
+	// 2. /btw with question marks user turn with IsBTW: true
+	chat.PromptLines = []string{"/btw how do I format date in bash?"}
+	chat.submitPrompt()
+	userTurn := chat.Turns[len(chat.Turns)-1]
+	if !userTurn.IsBTW {
+		t.Fatal("expected IsBTW: true on user tangent turn")
+	}
+	if userTurn.Content != "how do I format date in bash?" {
+		t.Fatalf("expected prefix stripped, got %q", userTurn.Content)
 	}
 }

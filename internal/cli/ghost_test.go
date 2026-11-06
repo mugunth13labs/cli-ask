@@ -176,29 +176,32 @@ func TestValidateCommandCompleteness(t *testing.T) {
 }
 
 func TestParseCLIArgsGhost(t *testing.T) {
-	p1 := parseCLIArgs([]string{"--toggle-ghost"})
-	if p1.Action != "toggle-ghost" {
-		t.Errorf("expected action 'toggle-ghost', got %q", p1.Action)
+	// --summon-ghost and --raise-ghost install the shell hook
+	p1 := parseCLIArgs([]string{"--summon-ghost"})
+	if p1.Action != "install-shell-ghost" {
+		t.Errorf("expected action 'install-shell-ghost' for --summon-ghost, got %q", p1.Action)
 	}
 
-	p1b := parseCLIArgs([]string{"--ghost-complete"})
-	if p1b.Action != "toggle-ghost" {
-		t.Errorf("expected action 'toggle-ghost' for --ghost-complete, got %q", p1b.Action)
+	p1b := parseCLIArgs([]string{"--raise-ghost"})
+	if p1b.Action != "install-shell-ghost" {
+		t.Errorf("expected action 'install-shell-ghost' for --raise-ghost, got %q", p1b.Action)
 	}
 
-	p1c := parseCLIArgs([]string{"--toggle-ghost-complete"})
-	if p1c.Action != "toggle-ghost" {
-		t.Errorf("expected action 'toggle-ghost' for --toggle-ghost-complete, got %q", p1c.Action)
+	// --slay-ghost uninstalls the shell hook
+	p1c := parseCLIArgs([]string{"--slay-ghost"})
+	if p1c.Action != "uninstall-shell-ghost" {
+		t.Errorf("expected action 'uninstall-shell-ghost' for --slay-ghost, got %q", p1c.Action)
+	}
+
+	// Legacy --ghost-complete is strictly NOT recognized as an action
+	pGhostLegacy := parseCLIArgs([]string{"--ghost-complete"})
+	if pGhostLegacy.Action != "query" {
+		t.Errorf("expected --ghost-complete to be unrecognized and default to 'query', got %q", pGhostLegacy.Action)
 	}
 
 	p2 := parseCLIArgs([]string{"--complete", "Get-Proc"})
 	if p2.Action != "complete" || p2.ActionArg != "Get-Proc" {
 		t.Errorf("expected action 'complete' with arg 'Get-Proc', got %q (%q)", p2.Action, p2.ActionArg)
-	}
-
-	p2b := parseCLIArgs([]string{"--ghost-complete", "docker ps"})
-	if p2b.Action != "complete" || p2b.ActionArg != "docker ps" {
-		t.Errorf("expected action 'complete' for parametric --ghost-complete, got %q (%q)", p2b.Action, p2b.ActionArg)
 	}
 
 	p3 := parseCLIArgs([]string{"--suggest", "ls -l"})
@@ -211,19 +214,9 @@ func TestParseCLIArgsGhost(t *testing.T) {
 		t.Errorf("expected action 'install-shell-ghost', got %q", p4.Action)
 	}
 
-	p4b := parseCLIArgs([]string{"--install-ghost-complete"})
-	if p4b.Action != "install-shell-ghost" {
-		t.Errorf("expected action 'install-shell-ghost' for --install-ghost-complete, got %q", p4b.Action)
-	}
-
 	p5 := parseCLIArgs([]string{"--uninstall-shell-ghost"})
 	if p5.Action != "uninstall-shell-ghost" {
 		t.Errorf("expected action 'uninstall-shell-ghost', got %q", p5.Action)
-	}
-
-	p5b := parseCLIArgs([]string{"--uninstall-ghost-complete"})
-	if p5b.Action != "uninstall-shell-ghost" {
-		t.Errorf("expected action 'uninstall-shell-ghost' for --uninstall-ghost-complete, got %q", p5b.Action)
 	}
 
 	p6 := parseCLIArgs([]string{"--uninstall-self"})

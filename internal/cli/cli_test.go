@@ -511,7 +511,7 @@ func TestStrictSlashCommands(t *testing.T) {
 	}
 
 	// Slash commands MUST be recognized (/model is intentionally removed from chat commands)
-	validCommands := []string{"/exit", "/quit", "/q", "/clear", "/c", "/help", "/?"}
+	validCommands := []string{"/exit", "/quit", "/q", "/clear", "/c", "/help", "/?", "/btw", "/btw query here"}
 	for _, cmd := range validCommands {
 		if !isChatCommand(cmd) {
 			t.Errorf("command %q with slash MUST be recognized as a chat command", cmd)
@@ -520,6 +520,26 @@ func TestStrictSlashCommands(t *testing.T) {
 
 	if isChatCommand("/model") || isChatCommand("/model gpt-4") {
 		t.Errorf("/model must NOT be recognized as an in-chat command; use --set-model instead")
+	}
+}
+
+func TestCLIArgBtwVsNoContext(t *testing.T) {
+	// 1. Regular prompt uses context and is not btw
+	p1 := parseCLIArgs([]string{"hello", "world"})
+	if !p1.UseContext || p1.IsBtw {
+		t.Fatalf("expected UseContext=true, IsBtw=false for regular query, got %v, %v", p1.UseContext, p1.IsBtw)
+	}
+
+	// 2. --no-context has UseContext=false (total amnesia)
+	p2 := parseCLIArgs([]string{"--no-context", "stateless", "query"})
+	if p2.UseContext || p2.IsBtw {
+		t.Fatalf("expected UseContext=false, IsBtw=false for --no-context, got %v, %v", p2.UseContext, p2.IsBtw)
+	}
+
+	// 3. --btw has UseContext=true (reads past memory) and IsBtw=true (omits future write)
+	p3 := parseCLIArgs([]string{"--btw", "tangent", "query"})
+	if !p3.UseContext || !p3.IsBtw {
+		t.Fatalf("expected UseContext=true, IsBtw=true for --btw, got %v, %v", p3.UseContext, p3.IsBtw)
 	}
 }
 

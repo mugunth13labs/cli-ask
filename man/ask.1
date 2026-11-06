@@ -1,4 +1,4 @@
-.TH ASK 1 "November 2026" "cli-ask 0.7.2" "User Commands"
+.TH ASK 1 "November 2026" "cli-ask 0.7.4" "User Commands"
 .SH NAME
 ask \- lean terminal AI assistant with session-scoped context, inline prompt composer, code generation, and interactive chat
 .SH SYNOPSIS
@@ -60,8 +60,20 @@ Start an interactive continuous chat session with conversation memory, mouse tex
 .BR \-c ", " \-\-clear
 Clear the conversation history for the current terminal session.
 .TP
+.B \-\-btw
+Execute a conversational tangent query using existing session history for context, but without updating the session file on disk.
+.TP
 .B \-\-no\-context
-Execute the query as a standalone request without loading or updating the session history.
+Execute the query as a standalone request with total amnesia (without loading or updating session history).
+.TP
+.BR \-\-summon\-ghost ", " \-\-raise\-ghost
+Install and enable Ghost-Complete AI shell autocomplete in your shell profile (Alt+RightArrow).
+.TP
+.B \-\-slay\-ghost
+Disable and cleanly remove Ghost-Complete from your shell profile.
+.TP
+.BR \-\-complete " " \fILINE\fR
+Headless single-line command completion query used by shell autocomplete widgets.
 .TP
 .B \-\-update\-self ", " \-\-update
 Check for the latest release on GitHub and update the running binary in-place (and update the man page if installed).
@@ -87,8 +99,11 @@ Print usage help and exit.
 .SH CHATBOT COMMANDS & SHORTCUTS
 Within interactive chatbot mode (\fBask -i\fR), the following commands and shortcuts are available:
 .TP
+.BR /btw " <" \fIQUESTION\fR ">"
+Ask an ephemeral tangent question using past conversation memory without saving the exchange into future conversation turns or session files.
+.TP
 .BR /clear ", " /c
-Clear conversation memory and reset session context.
+Clear conversation memory and reset session context (prompts for confirmation before clearing).
 .TP
 .B /help
 Display available chatbot commands.
