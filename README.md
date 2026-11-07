@@ -2,7 +2,9 @@
 
 **The lean, zero-dependency AI companion for your command line.**
 
-`ask` brings AI intelligence straight to your terminal. It starts instantly, streams answers in real time, and follows the Unix philosophy: do one thing, do it fast, and stay out of your way.
+`ask` brings AI intelligence straight to your terminal. It starts instantly, streams answers in real time, and follows the Unix philosophy: **do one thing, do it fast, and stay out of your way**.
+
+---
 
 ```bash
 # Quick command lookups
@@ -40,14 +42,9 @@ $ ask -i
 - **Progressive `@filename` Navigation**: Attach local files effortlessly. Typing `@` activates lazy, single-level directory peeling (`@src/`) so even massive repos and `node_modules` never freeze.
 - **Interactive Chat (`ask -i`)**: Continuous back-and-forth dialogue with session memory, mouse text selection, and quick-access `/` slash command dropdowns.
 - **Tangent Queries (`--btw` & `/btw`)**: Ask side questions that read from past session memory without contaminating future conversation turns or disk files.
-- **High-Contrast Design**: Crisp Deep Midnight Navy message boxes with bright white text, electric cyan borders, and amber tags for all terminal themes.
-- **Clipboard Feedback**: Visual toast indicators (`[Copied to clipboard]`) when yanking text with `y`, `Enter`, or `Ctrl+Shift+C`.
 - **Pure Code Generation (`--cg`, `-o`, `-a`)**: Generates raw, executable code without markdown code fences or conversational filler—ready to run or pipe.
 - **Shell-Scoped Context**: Remembers conversation history within your active terminal tab without leaking across unrelated windows or tmux panes.
 - **Unix Piping**: Seamlessly inspect piped output from `git`, `docker`, `journalctl`, `curl`, and other standard tools.
-- **Free Models by Default**: Powered by OpenRouter, pre-configured with high-performance free models.
-- **Self-Updating**: Keep up to date with a single command: `ask --update-self`.
-
 ---
 
 ## Installation
@@ -100,8 +97,11 @@ $ ask
   and alerts via webhook when / exceeds 90%.
 ────────────────────────────────────────────────────────────────────────────
 ```
+
+![Inline Composer and Filepicker](assets/composer-filepicker.gif)
+
 - Press `Enter` for a new line.
-- Press `Alt+→` (`Alt+RightArrow`, or `Ctrl+S` / `Ctrl+Enter`) to submit.
+- Press `Alt+→` (`Alt+RightArrow`) to submit.
 - Press `Ctrl+Right` / `Ctrl+Left` to jump words forward / backward.
 - Press `Ctrl+C` to cancel.
 
@@ -125,6 +125,9 @@ ask --cg "refactor @src/utils.py to use async/await"
 
 ### 4. Interactive Chat (`ask -i`)
 Launch continuous chat mode for deep technical discussions or iterative problem-solving:
+
+![Interactive Chat Mode](assets/interactive-chat.gif)
+
 ```bash
 $ ask -i
 ```
@@ -134,7 +137,7 @@ $ ask -i
 - **Confirmation Modals**: Safeguards against accidental exits or history purges (`/clear` and `/exit` prompt for confirmation).
 - **Mouse Selection**: Click and drag to select text in chat history, then press `y`, `Enter`, or `Ctrl+Shift+C` to copy to clipboard (with green toast feedback).
 - **Keyboard Shortcuts**:
-  - `Alt+→` (`Alt+RightArrow`, or `Ctrl+S` / `Ctrl+Enter`) — Send prompt
+  - `Alt+→` (`Alt+RightArrow`) — Send prompt
   - `Ctrl+Right` / `Ctrl+Left` — Jump word forward / backward
   - `Enter` — Insert newline in prompt
   - `Up` / `Down` — Navigate history & prompt
@@ -143,6 +146,9 @@ $ ask -i
 
 ### 5. Tangent Queries (`--btw`)
 Want to ask a quick side question without permanently affecting your terminal session's ongoing conversation?
+
+![Ephemeral Tangent Queries](assets/btw-tangent.gif)
+
 ```bash
 # Uses past conversation history for context, but does NOT save the tangent
 ask --btw "why did you recommend using systemd instead of supervisord in the previous step?"
@@ -152,6 +158,9 @@ ask --btw "why did you recommend using systemd instead of supervisord in the pre
 
 ### 6. Code Generation
 Generate raw, executable scripts or configurations:
+
+![Pure Code Generation](assets/codegen.gif)
+
 ```bash
 # Generate pure code to stdout
 ask --cg "write a python function to compute fibonacci numbers"
@@ -166,6 +175,9 @@ ask -a docker-compose.yml "add redis with persistent storage"
 
 ### 7. Pipes & Logs
 Feed command outputs directly into `ask`:
+
+![Unix Pipe Integration](assets/pipe.gif)
+
 ```bash
 # Debug system logs
 journalctl -u postgresql -n 50 --no-pager | ask "why did the service fail to start?"
@@ -179,6 +191,9 @@ ss -tulpn | ask "which ports are exposed to the public internet?"
 
 ### 8. Ghost-Complete: AI Shell Autocompletion (`Alt+RightArrow`)
 Complete shell commands in-place right at your terminal prompt:
+
+![Ghost-Complete Autocomplete](assets/ghost-complete.gif)
+
 ```bash
 # Install and enable Ghost-Complete in your shell profile
 ask --summon-ghost

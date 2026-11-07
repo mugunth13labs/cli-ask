@@ -19,6 +19,10 @@ ask-test
 *.key
 *.env
 
+# VHS recording tapes and temp artifacts
+*.tape
+.vhs/
+
 # Local agent dev rules
 AGENTS.md
 
